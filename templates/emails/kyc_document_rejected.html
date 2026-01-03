@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KYC Document Rejected</title>
+    <style>
+        body, table, td, p {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            line-height: 1.5;
+        }
+        body {
+            background-color: #000000;
+            color: #FFD700;
+        }
+        img {
+            display: block;
+            border: 0;
+            outline: none;
+            text-decoration: none;
+            max-width: 100%;
+        }
+        .email-wrapper {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid #FFD700;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+        }
+        .email-header {
+            background: linear-gradient(145deg, #FFD700, #B8860B);
+            text-align: center;
+            padding: 25px 15px;
+        }
+        .email-header h1 {
+            margin: 0;
+            font-size: 28px;
+            color: #000000;
+            letter-spacing: 1px;
+        }
+        .email-content {
+            padding: 20px 30px;
+            color: #f5f5f5;
+        }
+        .email-content h2 {
+            color: #FFD700;
+            font-size: 22px;
+            margin-bottom: 10px;
+        }
+        .rejected-box {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 77, 77, 0.4);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .rejected-box p {
+            margin: 8px 0;
+            font-size: 16px;
+            color: #ff4d4d;
+        }
+        .btn {
+            display: inline-block;
+            background: linear-gradient(145deg, #FFD700, #B8860B);
+            color: #000000;
+            text-decoration: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+            border: 1px solid #FFD700;
+            box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+        }
+        .btn:hover {
+            background: linear-gradient(145deg, #B8860B, #FFD700);
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.7);
+        }
+        .email-footer {
+            background-color: #0d0d0d;
+            text-align: center;
+            padding: 15px;
+            color: #cccccc;
+            font-size: 12px;
+            border-top: 1px solid #FFD700;
+        }
+        .email-footer a {
+            color: #FFD700;
+            text-decoration: none;
+        }
+        @media screen and (max-width: 600px) {
+            .email-content {
+                padding: 15px;
+            }
+            .email-header h1 {
+                font-size: 22px;
+            }
+            .email-content h2 {
+                font-size: 18px;
+            }
+            .btn {
+                font-size: 14px;
+                padding: 10px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="email-header">
+            <h1>KYC Document Review Result</h1>
+        </div>
+        <div class="email-content">
+            <h2>Action Required: Document Rejected</h2>
+            <div class="rejected-box">
+                <p>Dear {{ user_name }},</p>
+                <p>
+                    {% if both_rejected %}
+                        Both your <span class="rejected">Identity</span> and <span class="rejected">Residence</span> documents have been <span class="rejected">rejected</span>.
+                    {% elif rejected_identity %}
+                        Your <span class="rejected">Identity</span> document has been <span class="rejected">rejected</span>.
+                    {% elif rejected_residence %}
+                        Your <span class="rejected">Residence</span> document has been <span class="rejected">rejected</span>.
+                    {% endif %}
+                </p>
+                <p>Please re-upload the rejected document(s) to continue your KYC process.</p>
+            </div>
+            <p style="text-align: center;">
+                <a href="{{ upload_url }}" class="btn">Re-upload Documents</a>
+            </p>
+        </div>
+        <div class="email-footer">
+            If you have questions, contact our support: <a href="mailto:{{ support_url }}">{{ support_url }}</a>
+        </div>
+    </div>
+</body>
+</html>
