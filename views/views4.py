@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from adminPanel.authentication import BlacklistCheckingJWTAuthentication
+from adminPanel.api_decorators import require_admin_approval
 from django.conf import settings
 from django.views.decorators.cache import cache_page
 from django.utils.decorators import method_decorator
@@ -824,6 +825,7 @@ class UserProfileView(APIView):
                 'dob': str(user.dob) if hasattr(user, 'dob') and user.dob else '',  # Add date of birth
                 'created_by': user.created_by.email if user.created_by else '',
                 'parent_ib': user.parent_ib.email if user.parent_ib else '',
+                'is_approved_by_admin': getattr(user, 'is_approved_by_admin', False),
             }
             return Response(data)
         except Exception as e:
@@ -837,6 +839,12 @@ class UserProfileView(APIView):
         """Update user profile details"""
         try:
             user = request.user
+            # Check if user is approved by admin
+            if not user.is_approved_by_admin:
+                return Response({
+                    "error": "Your account has not been approved by the admin yet. Please wait for admin approval.",
+                    "code": "user_not_approved"
+                }, status=status.HTTP_403_FORBIDDEN)
             data = request.data
 
             # Update allowed fields using the correct field names
@@ -1023,7 +1031,54 @@ class UserDocumentView(APIView):
                 {'error': 'Failed to upload document', 'details': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+@method_decorator(csrf_exempt, name='dispatch')
+class UserProfileChangeRequestsView(APIView):
+    """
+    API View for users to check their profile change request status.
+    Returns only the current user's profile change requests.
+    """
+    authentication_classes = [BlacklistCheckingJWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        """Get the current user's profile change requests"""
+        try:
+            from adminPanel.models import ChangeRequest
+            
+            # Get all profile change requests for the current user
+            requests = ChangeRequest.objects.filter(user=request.user)
+            
+            def _file_url(field):
+                try:
+                    return field.url if field else None
+                except Exception:
+                    return None
+
+            # Serialize the data
+            data = []
+            for req in requests:
+                data.append({
+                    'id': req.id,
+                    'user_id': req.user_id,
+                    'user_name': req.user.get_full_name() or req.user.username,
+                    'email': req.user.email,
+                    'requested_changes': getattr(req, 'requested_data', None),
+                    'id_proof': _file_url(getattr(req, 'id_proof', None)),
+                    'address_proof': _file_url(getattr(req, 'address_proof', None)),
+                    'status': req.status,
+                    'created_at': req.created_at,
+                    'reviewed_at': req.reviewed_at
+                })
+            
+            return Response(data, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            logger.error(f"Error fetching profile change requests: {e}", exc_info=True)
+            return Response(
+                {'error': 'Failed to fetch profile change requests', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
 @method_decorator(csrf_exempt, name='dispatch')
 class UserProfileBannerView(APIView):
     """Handle profile banner upload and retrieval.
