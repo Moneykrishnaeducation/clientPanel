@@ -69,6 +69,7 @@ from .views.views4 import (
     IBCommissionTransactionsView, IBTransactionsView, IBReferralLinkView
 )
 # Import StatsOverviewView with alias to avoid conflicts
+from .views.views4 import UserProfileChangeRequestsView
 from .views.views4 import StatsOverviewView as IBStatsOverviewView, BasicUserInfoView
 from .views.admin_approval_views import (
     PendingRequestsView, ApprovalActionView, UserVerificationStatusView
@@ -116,6 +117,10 @@ from adminPanel.views.notification_views import (
 api_patterns = [
     path('signup/', csrf_exempt(auth_views.signup_view), name='api-signup'),
     path('login/', csrf_exempt(auth_views.client_login_view), name='api-login'),
+    path('oauth/google/', csrf_exempt(auth_views.google_oauth_view), name='api-oauth-google'),
+    path('oauth/google/callback/', csrf_exempt(auth_views.google_oauth_callback), name='api-oauth-google-callback'),
+    path('oauth/microsoft/', csrf_exempt(auth_views.microsoft_oauth_view), name='api-oauth-microsoft'),    
+    path('oauth/microsoft/callback/', csrf_exempt(auth_views.microsoft_oauth_callback), name='api-oauth-microsoft-callback'),    
     path('resend-login-otp/', csrf_exempt(auth_views.resend_login_otp_view), name='api-resend-login-otp'),
     path('login-otp-status/', csrf_exempt(auth_views.login_otp_status_view), name='api-login-otp-status'),
     path('reset-password/', csrf_exempt(auth_views.reset_password_view), name='api-reset-password'),
@@ -134,7 +139,7 @@ api_patterns = [
 
     # Exchange rate endpoint
     path('get-usd-inr-rate/', USDINRRateView.as_view(), name='usd-inr-rate'),
-
+    path('profile/profile-change-requests/', UserProfileChangeRequestsView.as_view(), name='api-profile-change-requests'),
     path('profile/documents/<str:doc_type>/', UserDocumentView.as_view(), name='api-upload-document'),
     path('profile/documents/', UserDocumentView.as_view(), name='api-get-documents'),
     path('profile/', UserProfileView.as_view(), name='api-profile'),
@@ -228,6 +233,12 @@ api_patterns = [
     path("account-coefficient/<str:account_id>/", get_account_coefficient, name="get_account_coefficient"),
     # Debug endpoint (admin only) to inspect account copy settings
     path('debug/account-coeff/<str:account_id>/', debug_account_coefficient, name='debug-account-coeff'),
+
+    # Compatibility aliases for older frontend bundles
+    path('mam-profit-details/<str:mam_id>/', MamProfitDetailsView.as_view(), name='api-mam-profit-details'),
+    # Accept POST with mam_id in request body (new frontends)
+    path('toggle-mam-status/', ToggleMamTradingStatusView.as_view(), name='api-toggle-mam-status-body'),
+    # Legacy path with mam_id in URL (some bundles still call this)
 
     # PAMM endpoints
     path('pamm/managed/', pamm_views.managed_pamm_list, name='api-pamm-managed'),
