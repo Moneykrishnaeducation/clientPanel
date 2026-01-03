@@ -214,6 +214,8 @@ api_patterns = [
     path('ib-request/', IBRequestView.as_view(), name='api-ib-request'),
     path('ib/referral-link/', IBReferralLinkView.as_view(), name='ib-referral-link'),
     path('send-reset-otp/', csrf_exempt(send_reset_otp_view), name='api-send-reset-otp'),
+    path('send-signup-otp/', csrf_exempt(auth_views.send_signup_otp_view), name='api-send-signup-otp'),
+    path('verify-signup-otp/', csrf_exempt(auth_views.verify_signup_otp_view), name='api-verify-signup-otp'),
     path('verify-otp/', csrf_exempt(VerifyOtpView.as_view()), name='api-verify-otp'),
     path('reset-password/confirm/', csrf_exempt(confirm_reset_password_view), name='api-confirm-reset-password'),
 

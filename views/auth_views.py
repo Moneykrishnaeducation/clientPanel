@@ -110,7 +110,6 @@ def signup_view(request):
     email = data.get('email')
     password = data.get('password')
     name = data.get('name', '').split(maxsplit=1)
-    phone = data.get('phone')
     referral_code = data.get('referral_code')  # <-- Get referral code from request
 
     # Basic validation
@@ -141,8 +140,8 @@ def signup_view(request):
             password=password,
             first_name=first_name,
             last_name=last_name,
-            phone_number=phone,
-            dob=request.data.get('dob'),
+            phone_number='',
+            dob=None,
             manager_admin_status='Client',  # Set as client
             parent_ib=parent_ib if parent_ib else None,
             referral_code_used=referral_code if referral_code else None
@@ -579,6 +578,79 @@ def client_login_view(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+def send_signup_otp_view(request):
+    """Send an OTP for signup verification to an arbitrary email address.
+
+    This does not require the user to exist yet. OTPs are stored in the cache
+    under key `signup_otp:{email}` for a short TTL and rate-limited by IP/email.
+    """
+    email = request.data.get('email')
+    if not email:
+        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        # Determine client IP and enforce per-IP send limit (default 5/hour)
+        try:
+            current_ip = get_client_ip(request)
+        except Exception:
+            current_ip = None
+
+        otp_ip_limit = getattr(settings, 'OTP_SEND_RATE_LIMIT_PER_HOUR_PER_IP', 5)
+        if current_ip:
+            rl_ip_key = f"rl:signup:otp:ip:{current_ip}"
+            if _check_rate_limit(rl_ip_key, otp_ip_limit, 3600):
+                return Response({'error': 'Too many OTP send attempts from your IP. Try again later.'}, status=429)
+
+        # Enforce cache-backed per-email send limit (default 5/hour)
+        otp_send_limit = getattr(settings, 'OTP_SEND_RATE_LIMIT_PER_HOUR', 5)
+        rl_key = f"rl:signup:otp:email:{email.strip().lower()}"
+        if _check_rate_limit(rl_key, otp_send_limit, 3600):
+            return Response({'error': 'Too many OTP send attempts. Try again later.'}, status=429)
+
+        # Generate OTP and store in cache for 10 minutes
+        otp = f"{random.randint(100000, 999999)}"
+        cache_key = f"signup_otp:{email.strip().lower()}"
+        cache.set(cache_key, otp, timeout=getattr(settings, 'SIGNUP_OTP_TTL_SECONDS', 600))
+
+        # Send OTP email (best-effort)
+        try:
+            EmailSender.send_otp_email(email, otp)
+        except Exception:
+            logger.exception('Failed to send signup OTP email')
+
+        return Response({'message': 'Verification code sent to your email.'})
+    except Exception:
+        logger.exception('send_signup_otp_view failed')
+        return Response({'error': 'Failed to send OTP'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_signup_otp_view(request):
+    """Verify a signup OTP stored in cache for the provided email."""
+    email = request.data.get('email')
+    otp = request.data.get('otp')
+    if not email or not otp:
+        return Response({'error': 'Email and OTP are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        cache_key = f"signup_otp:{email.strip().lower()}"
+        expected = cache.get(cache_key)
+        if not expected:
+            return Response({'error': 'No OTP found or it has expired'}, status=status.HTTP_400_BAD_REQUEST)
+        if expected != str(otp).strip():
+            return Response({'error': 'Invalid OTP'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # OTP verified: remove from cache and mark ephemeral verified flag (short TTL)
+        cache.delete(cache_key)
+        verified_key = f"signup_verified:{email.strip().lower()}"
+        cache.set(verified_key, True, timeout=getattr(settings, 'SIGNUP_VERIFIED_TTL_SECONDS', 600))
+        return Response({'verified': True})
+    except Exception:
+        logger.exception('verify_signup_otp_view failed')
+        return Response({'error': 'OTP verification failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 def set_token_view(request):
     key = request.data.get('key')
     value = request.data.get('value')
