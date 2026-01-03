@@ -25,6 +25,13 @@ from django.db.models import Q
 from clientPanel import tasks as client_tasks
 from django.core.cache import cache
 import threading
+import requests
+from django.core.files.base import ContentFile
+from urllib.parse import urlparse, urlencode
+from django.shortcuts import redirect
+from django.http import HttpResponseRedirect
+import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +147,6 @@ def signup_view(request):
             password=password,
             first_name=first_name,
             last_name=last_name,
-            phone_number='',
-            dob=None,
             manager_admin_status='Client',  # Set as client
             parent_ib=parent_ib if parent_ib else None,
             referral_code_used=referral_code if referral_code else None
@@ -682,6 +687,400 @@ def set_token_view(request):
         logger.exception('set_token_view failed')
         return Response({'error': 'failed to set cookie'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+def _save_profile_image_from_url(user, url):
+    try:
+        if not url:
+            return
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return
+        content = resp.content
+        # Attempt to derive extension
+        parsed = urlparse(url)
+        root, ext = os.path.splitext(parsed.path)
+        if not ext:
+            # Try from content-type
+            ctype = resp.headers.get('content-type', '')
+            if 'jpeg' in ctype or 'jpg' in ctype:
+                ext = '.jpg'
+            elif 'png' in ctype:
+                ext = '.png'
+            else:
+                ext = '.jpg'
+
+        filename = f"{(user.email or 'user')}_profile{ext}"
+        user.profile_pic.save(filename, ContentFile(content), save=True)
+    except Exception:
+        logger.exception('Failed to save profile image from url')
+
+
+@csrf_exempt
+@api_view(['GET', 'POST', 'OPTIONS'])
+@permission_classes([AllowAny])
+def google_oauth_view(request):
+    """Exchange Google id_token or access_token for user signup/login.
+
+    Accepts: { id_token?, access_token?, profile?: {name,email,phone_number,dob,address,profile_image_url}, referral_code? }
+    """
+    # Support GET to initiate OAuth redirect from frontend
+    if request.method == 'GET':
+        try:
+            client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID')
+            if not client_id:
+                return Response({'error': 'Google OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
+            frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+            redirect_uri = f"{frontend_base.rstrip('/')}/oauth/callback/google"
+            params = {
+                'client_id': client_id,
+                'redirect_uri': redirect_uri,
+                'response_type': 'token',
+                'scope': 'openid email profile',
+                'include_granted_scopes': 'true',
+                'prompt': 'select_account'
+            }
+            auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urlencode(params)
+            return HttpResponseRedirect(auth_url)
+        except Exception:
+            logger.exception('Failed to build Google OAuth redirect')
+            return Response({'error': 'Failed to initiate Google OAuth'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if request.method == 'OPTIONS':
+        response = HttpResponse()
+        response['X-CSRFToken'] = get_token(request)
+        return response
+
+    data = request.data
+    id_token = data.get('id_token')
+    access_token = data.get('access_token')
+    profile = data.get('profile', {}) or {}
+    referral_code = data.get('referral_code')
+
+    user_info = {}
+    try:
+        if id_token:
+            # Verify ID token
+            info_url = f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
+            r = requests.get(info_url, timeout=10)
+            if r.status_code != 200:
+                return Response({'error': 'Invalid Google id_token'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = r.json()
+        elif access_token:
+            # Use userinfo endpoint
+            r = requests.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={'Authorization': f'Bearer {access_token}'}, timeout=10)
+            if r.status_code != 200:
+                return Response({'error': 'Invalid Google access_token'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = r.json()
+        else:
+            # Allow frontend to provide profile directly
+            user_info = profile
+
+        email = user_info.get('email') or profile.get('email')
+        if not email:
+            return Response({'error': 'Email not provided by Google'}, status=status.HTTP_400_BAD_REQUEST)
+
+        name = user_info.get('name') or profile.get('name') or ''
+        first_name = ''
+        last_name = ''
+        if name:
+            parts = name.split(maxsplit=1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ''
+
+        phone_number = user_info.get('phone_number') or profile.get('phone_number') or ''
+        dob = user_info.get('birthdate') or profile.get('dob')
+        address = profile.get('address') or ''
+        picture = user_info.get('picture') or profile.get('profile_image_url')
+
+        # Find or create user
+        user = CustomUser.objects.filter(email__iexact=email).first()
+        created = False
+        if not user:
+            # Create with random password
+            password = CustomUser.objects.make_random_password()
+            user = CustomUser.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=first_name or email.split('@')[0],
+                last_name=last_name or '',
+                manager_admin_status='Client',
+                parent_ib=CustomUser.objects.filter(referral_code=referral_code, IB_status=True).first() if referral_code else None,
+                referral_code_used=referral_code if referral_code else None
+            )
+            created = True
+
+        # Update fields if provided
+        updated_fields = []
+        if first_name and user.first_name != first_name:
+            user.first_name = first_name
+            updated_fields.append('first_name')
+        if last_name and user.last_name != last_name:
+            user.last_name = last_name
+            updated_fields.append('last_name')
+        if phone_number and user.phone_number != phone_number:
+            user.phone_number = phone_number
+            updated_fields.append('phone_number')
+        if dob:
+            try:
+                # Accept YYYY-MM-DD or other ISO formats
+                parsed = datetime.fromisoformat(dob).date() if isinstance(dob, str) else dob
+                if user.dob != parsed:
+                    user.dob = parsed
+                    updated_fields.append('dob')
+            except Exception:
+                pass
+        if address and user.address != address:
+            user.address = address
+            updated_fields.append('address')
+
+        if picture:
+            try:
+                _save_profile_image_from_url(user, picture)
+            except Exception:
+                pass
+
+        if updated_fields and not created:
+            try:
+                user.save(update_fields=updated_fields)
+            except Exception:
+                user.save()
+
+        # Auto-login: issue JWTs
+        try:
+            refresh = RefreshToken.for_user(user)
+            try:
+                refresh['aud'] = 'client.vtindex'
+                refresh['scope'] = 'client:*'
+                access = refresh.access_token
+                access['aud'] = 'client.vtindex'
+                access['scope'] = 'client:*'
+            except Exception:
+                access = refresh.access_token
+            try:
+                access.outstand()
+            except Exception:
+                logger.exception('Failed to create OutstandingToken for oauth access')
+            access_token = str(access)
+        except Exception:
+            return Response({'error': 'Failed to create session tokens'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        resp_body = {
+            'success': True,
+            'created': created,
+            'access': access_token,
+            'refresh': str(refresh),
+            'role': 'client',
+            'user': {
+                'email': user.email,
+                'name': f"{user.first_name} {user.last_name}".strip(),
+                'phone_number': user.phone_number,
+                'dob': user.dob.isoformat() if user.dob else None,
+                'address': user.address,
+            }
+        }
+
+        response = Response(resp_body)
+        # Set cookies similar to signup flow
+        try:
+            secure_flag = not settings.DEBUG
+            access_lifetime = getattr(settings, 'SIMPLE_JWT', {}).get('ACCESS_TOKEN_LIFETIME', None)
+            access_max_age = int(access_lifetime.total_seconds()) if access_lifetime else None
+            response.set_cookie('jwt_token', access_token, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+            response.set_cookie('access_token', access_token, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+            response.set_cookie('refresh_token', str(refresh), httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=None)
+            response.set_cookie('role', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+            response.set_cookie('UserRole', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+        except Exception:
+            logger.exception('Failed to set auth cookies for google oauth')
+
+        return response
+    except Exception:
+        logger.exception('google_oauth_view failed')
+        return Response({'error': 'Google OAuth signup failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['GET', 'POST', 'OPTIONS'])
+@permission_classes([AllowAny])
+def microsoft_oauth_view(request):
+    """Exchange Microsoft access_token for user signup/login.
+
+    Accepts: { access_token?, profile?: {name,email,phone_number,dob,address,profile_image_url}, referral_code? }
+    """
+    # Support GET to initiate Microsoft OAuth redirect from frontend
+    if request.method == 'GET':
+        try:
+            client_id = getattr(settings, 'MICROSOFT_OAUTH_CLIENT_ID', None) or os.environ.get('MICROSOFT_OAUTH_CLIENT_ID')
+            tenant = getattr(settings, 'MICROSOFT_OAUTH_TENANT_ID', None) or os.environ.get('MICROSOFT_OAUTH_TENANT_ID') or 'common'
+            if not client_id:
+                return Response({'error': 'Microsoft OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
+            frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+            redirect_uri = f"{frontend_base.rstrip('/')}/oauth/callback/microsoft"
+            params = {
+                'client_id': client_id,
+                'redirect_uri': redirect_uri,
+                'response_type': 'token',
+                'scope': 'openid email profile',
+                'response_mode': 'fragment',
+                'prompt': 'select_account'
+            }
+            auth_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?' + urlencode(params)
+            return HttpResponseRedirect(auth_url)
+        except Exception:
+            logger.exception('Failed to build Microsoft OAuth redirect')
+            return Response({'error': 'Failed to initiate Microsoft OAuth'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if request.method == 'OPTIONS':
+        response = HttpResponse()
+        response['X-CSRFToken'] = get_token(request)
+        return response
+
+    data = request.data
+    access_token = data.get('access_token')
+    profile = data.get('profile', {}) or {}
+    referral_code = data.get('referral_code')
+
+    user_info = {}
+    try:
+        if access_token:
+            headers = {'Authorization': f'Bearer {access_token}'}
+            r = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers, timeout=10)
+            if r.status_code != 200:
+                return Response({'error': 'Invalid Microsoft access_token'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = r.json()
+            # Try to fetch photo
+            photo_url = None
+            try:
+                pr = requests.get('https://graph.microsoft.com/v1.0/me/photo/$value', headers=headers, timeout=10)
+                if pr.status_code == 200:
+                    # Save directly from bytes
+                    # We'll attach to user later via helper
+                    photo_bytes = pr.content
+                else:
+                    photo_bytes = None
+            except Exception:
+                photo_bytes = None
+        else:
+            user_info = profile
+            photo_bytes = None
+
+        email = user_info.get('mail') or user_info.get('userPrincipalName') or profile.get('email')
+        if not email:
+            return Response({'error': 'Email not provided by Microsoft'}, status=status.HTTP_400_BAD_REQUEST)
+
+        name = user_info.get('displayName') or profile.get('name') or ''
+        parts = name.split(maxsplit=1) if name else []
+        first_name = parts[0] if parts else email.split('@')[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+
+        phone_number = profile.get('phone_number') or ''
+        dob = profile.get('dob')
+        address = profile.get('address') or ''
+
+        user = CustomUser.objects.filter(email__iexact=email).first()
+        created = False
+        if not user:
+            password = CustomUser.objects.make_random_password()
+            user = CustomUser.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                manager_admin_status='Client',
+                parent_ib=CustomUser.objects.filter(referral_code=referral_code, IB_status=True).first() if referral_code else None,
+                referral_code_used=referral_code if referral_code else None
+            )
+            created = True
+
+        updated_fields = []
+        if first_name and user.first_name != first_name:
+            user.first_name = first_name
+            updated_fields.append('first_name')
+        if last_name and user.last_name != last_name:
+            user.last_name = last_name
+            updated_fields.append('last_name')
+        if phone_number and user.phone_number != phone_number:
+            user.phone_number = phone_number
+            updated_fields.append('phone_number')
+        if dob:
+            try:
+                parsed = datetime.fromisoformat(dob).date() if isinstance(dob, str) else dob
+                if user.dob != parsed:
+                    user.dob = parsed
+                    updated_fields.append('dob')
+            except Exception:
+                pass
+        if address and user.address != address:
+            user.address = address
+            updated_fields.append('address')
+
+        if photo_bytes:
+            try:
+                ext = '.jpg'
+                filename = f"{(user.email or 'user')}_profile{ext}"
+                user.profile_pic.save(filename, ContentFile(photo_bytes), save=True)
+            except Exception:
+                logger.exception('Failed to save microsoft profile photo')
+
+        if updated_fields and not created:
+            try:
+                user.save(update_fields=updated_fields)
+            except Exception:
+                user.save()
+
+        # Issue tokens
+        try:
+            refresh = RefreshToken.for_user(user)
+            try:
+                refresh['aud'] = 'client.vtindex'
+                refresh['scope'] = 'client:*'
+                access = refresh.access_token
+                access['aud'] = 'client.vtindex'
+                access['scope'] = 'client:*'
+            except Exception:
+                access = refresh.access_token
+            try:
+                access.outstand()
+            except Exception:
+                logger.exception('Failed to create OutstandingToken for oauth access')
+            access_token = str(access)
+        except Exception:
+            return Response({'error': 'Failed to create session tokens'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        resp_body = {
+            'success': True,
+            'created': created,
+            'access': access_token,
+            'refresh': str(refresh),
+            'role': 'client',
+            'user': {
+                'email': user.email,
+                'name': f"{user.first_name} {user.last_name}".strip(),
+                'phone_number': user.phone_number,
+                'dob': user.dob.isoformat() if user.dob else None,
+                'address': user.address,
+            }
+        }
+
+        response = Response(resp_body)
+        try:
+            secure_flag = not settings.DEBUG
+            access_lifetime = getattr(settings, 'SIMPLE_JWT', {}).get('ACCESS_TOKEN_LIFETIME', None)
+            access_max_age = int(access_lifetime.total_seconds()) if access_lifetime else None
+            response.set_cookie('jwt_token', access_token, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+            response.set_cookie('access_token', access_token, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+            response.set_cookie('refresh_token', str(refresh), httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=None)
+            response.set_cookie('role', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+            response.set_cookie('UserRole', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+        except Exception:
+            logger.exception('Failed to set auth cookies for microsoft oauth')
+
+        return response
+    except Exception:
+        logger.exception('microsoft_oauth_view failed')
+        return Response({'error': 'Microsoft OAuth signup failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @csrf_exempt
 @api_view(['POST'])
