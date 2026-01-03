@@ -366,6 +366,7 @@ urlpatterns = [
     # Include all client patterns
     path('', include(client_patterns)),
 
+    re_path(r'^(?!api/|client/api/|static/|media/|admin/).*$', serve_client_app, name='catch-all'),
     # Catch-all route for the SPA (excluding API routes, media files, and all API endpoints) - TEMPORARILY DISABLED
     # re_path(r'^(?!api/|media/|static/|user-info/|stats-overview|recent-transactions/|user-trading-accounts/|create-trading-account/|user-accounts/|user-demo-accounts/|validate-token/|getmydetails/|user-transactions/|pending-transactions/|packages/|ib/|manual-deposit/|cheesepay-|usdt-deposit/|withdraw-|bank-details/|crypto-details/|available-mam-managers/|user-mam-accounts/|mam-accounts/|mam/|toggle-|user-investments/|pause-copying/|start-copying/|user/|internal-transfer|get-usd-inr-rate/|create-demo-account/|create-live-account/|reset-demo-balance/|change-demo-leverage/|tickets/|prop-trading-requests/|my-requests/|cancel-request/|open-positions/|get-trading-positions/|transactions|forgot-password/|verify-otp/|reset-password/|ib-request/|bank-details-request|change-request/).*$', serve_client_app, name='catch-all'),
 ]
