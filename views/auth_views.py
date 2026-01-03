@@ -13,6 +13,9 @@ from adminPanel.models import CustomUser
 from adminPanel.EmailSender import EmailSender
 from django.utils import timezone
 import random
+import secrets
+import jwt
+from jwt import PyJWKClient
 from adminPanel.models import ActivityLog
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
@@ -715,6 +718,33 @@ def _save_profile_image_from_url(user, url):
         logger.exception('Failed to save profile image from url')
 
 
+def _verify_id_token(id_token, provider, client_id, tenant=None):
+    """Verify an ID token (Google or Microsoft) against provider JWKS and return decoded claims on success.
+
+    Returns decoded claims dict or None on failure.
+    """
+    try:
+        if not id_token:
+            return None
+        if provider == 'google':
+            jwks_url = 'https://www.googleapis.com/oauth2/v3/certs'
+            issuer = 'https://accounts.google.com'
+        elif provider == 'microsoft':
+            t = tenant or 'common'
+            jwks_url = f'https://login.microsoftonline.com/{t}/discovery/v2.0/keys'
+            issuer = f'https://login.microsoftonline.com/{t}/v2.0'
+        else:
+            return None
+
+        jwk_client = PyJWKClient(jwks_url)
+        signing_key = jwk_client.get_signing_key_from_jwt(id_token).key
+        decoded = jwt.decode(id_token, signing_key, algorithms=['RS256'], audience=client_id, issuer=issuer)
+        return decoded
+    except Exception:
+        logger.exception('ID token verification failed')
+        return None
+
+
 @csrf_exempt
 @api_view(['GET', 'POST', 'OPTIONS'])
 @permission_classes([AllowAny])
@@ -729,16 +759,32 @@ def google_oauth_view(request):
             client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID')
             if not client_id:
                 return Response({'error': 'Google OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
-            frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
-            redirect_uri = f"{frontend_base.rstrip('/')}/oauth/callback/google"
+            # server callback URI for authorization-code flow
+            callback_path = reverse('api-oauth-google-callback')
+            redirect_uri = request.build_absolute_uri(callback_path)
+            # preserve requested action in state
+            state_val = request.GET.get('state') or request.GET.get('action') or 'login'
+            # generate CSRF-like nonce and store in session keyed by provider
+            try:
+                nonce = secrets.token_urlsafe(16)
+                request.session['oauth_state_nonce_google'] = nonce
+                request.session.modified = True
+            except Exception:
+                nonce = None
+            # embed action and nonce into state (frontend sends action only; server appends nonce)
             params = {
                 'client_id': client_id,
                 'redirect_uri': redirect_uri,
-                'response_type': 'token',
+                'response_type': 'code',
                 'scope': 'openid email profile',
-                'include_granted_scopes': 'true',
+                'access_type': 'offline',
                 'prompt': 'select_account'
             }
+            if state_val:
+                if nonce:
+                    params['state'] = f"{state_val}:{nonce}"
+                else:
+                    params['state'] = state_val
             auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urlencode(params)
             return HttpResponseRedirect(auth_url)
         except Exception:
@@ -759,12 +805,12 @@ def google_oauth_view(request):
     user_info = {}
     try:
         if id_token:
-            # Verify ID token
-            info_url = f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
-            r = requests.get(info_url, timeout=10)
-            if r.status_code != 200:
+            # Verify ID token signature, aud and iss
+            client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID')
+            verified = _verify_id_token(id_token, 'google', client_id)
+            if not verified:
                 return Response({'error': 'Invalid Google id_token'}, status=status.HTTP_400_BAD_REQUEST)
-            user_info = r.json()
+            user_info = verified
         elif access_token:
             # Use userinfo endpoint
             r = requests.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={'Authorization': f'Bearer {access_token}'}, timeout=10)
@@ -915,16 +961,29 @@ def microsoft_oauth_view(request):
             tenant = getattr(settings, 'MICROSOFT_OAUTH_TENANT_ID', None) or os.environ.get('MICROSOFT_OAUTH_TENANT_ID') or 'common'
             if not client_id:
                 return Response({'error': 'Microsoft OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
-            frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
-            redirect_uri = f"{frontend_base.rstrip('/')}/oauth/callback/microsoft"
+            # server callback URI for authorization-code flow
+            callback_path = reverse('api-oauth-microsoft-callback')
+            redirect_uri = request.build_absolute_uri(callback_path)
+            state_val = request.GET.get('state') or request.GET.get('action') or 'login'
+            try:
+                nonce = secrets.token_urlsafe(16)
+                request.session['oauth_state_nonce_microsoft'] = nonce
+                request.session.modified = True
+            except Exception:
+                nonce = None
             params = {
                 'client_id': client_id,
                 'redirect_uri': redirect_uri,
-                'response_type': 'token',
+                'response_type': 'code',
                 'scope': 'openid email profile',
-                'response_mode': 'fragment',
+                'response_mode': 'query',
                 'prompt': 'select_account'
             }
+            if state_val:
+                if nonce:
+                    params['state'] = f"{state_val}:{nonce}"
+                else:
+                    params['state'] = state_val
             auth_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?' + urlencode(params)
             return HttpResponseRedirect(auth_url)
         except Exception:
@@ -938,12 +997,22 @@ def microsoft_oauth_view(request):
 
     data = request.data
     access_token = data.get('access_token')
+    id_token = data.get('id_token')
     profile = data.get('profile', {}) or {}
     referral_code = data.get('referral_code')
 
     user_info = {}
     try:
-        if access_token:
+        if id_token:
+            client_id = getattr(settings, 'MICROSOFT_OAUTH_CLIENT_ID', None) or os.environ.get('MICROSOFT_OAUTH_CLIENT_ID')
+            tenant = getattr(settings, 'MICROSOFT_OAUTH_TENANT_ID', None) or os.environ.get('MICROSOFT_OAUTH_TENANT_ID') or 'common'
+            verified = _verify_id_token(id_token, 'microsoft', client_id, tenant=tenant)
+            if not verified:
+                return Response({'error': 'Invalid Microsoft id_token'}, status=status.HTTP_400_BAD_REQUEST)
+            # Map claims to expected fields
+            user_info = verified
+            photo_bytes = None
+        elif access_token:
             headers = {'Authorization': f'Bearer {access_token}'}
             r = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers, timeout=10)
             if r.status_code != 200:
@@ -1081,6 +1150,333 @@ def microsoft_oauth_view(request):
     except Exception:
         logger.exception('microsoft_oauth_view failed')
         return Response({'error': 'Microsoft OAuth signup failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def google_oauth_callback(request):
+    """Server-side callback to handle Google authorization-code exchange."""
+    code = request.GET.get('code')
+    if not code:
+        return Response({'error': 'Missing code'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID')
+        client_secret = getattr(settings, 'GOOGLE_OAUTH_CLIENT_SECRET', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET')
+        if not client_id or not client_secret:
+            return Response({'error': 'Google OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate state nonce (CSRF-like)
+        state_raw = request.GET.get('state') or ''
+        try:
+            action = None
+            if ':' in state_raw:
+                action, nonce = state_raw.rsplit(':', 1)
+            else:
+                action = state_raw
+                nonce = None
+            session_nonce = request.session.get('oauth_state_nonce_google')
+            # If we have a session nonce, require it to match
+            if session_nonce:
+                if not nonce or nonce != session_nonce:
+                    logger.warning('OAuth state nonce mismatch for Google')
+                    return Response({'error': 'Invalid oauth state'}, status=status.HTTP_400_BAD_REQUEST)
+                # consume nonce
+                try:
+                    del request.session['oauth_state_nonce_google']
+                    request.session.modified = True
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception('Failed to validate oauth state for Google')
+            return Response({'error': 'Invalid oauth state'}, status=status.HTTP_400_BAD_REQUEST)
+
+        redirect_uri = request.build_absolute_uri()
+        token_url = 'https://oauth2.googleapis.com/token'
+        data = {
+            'code': code,
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'redirect_uri': redirect_uri,
+            'grant_type': 'authorization_code'
+        }
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        r = requests.post(token_url, data=data, headers=headers, timeout=10)
+        if r.status_code != 200:
+            logger.exception('Google token exchange failed: %s', r.text)
+            return Response({'error': 'Failed to exchange code for token'}, status=status.HTTP_400_BAD_REQUEST)
+        token_json = r.json()
+        access_token = token_json.get('access_token')
+        id_token = token_json.get('id_token')
+        if not access_token:
+            return Response({'error': 'No access_token from Google'}, status=status.HTTP_400_BAD_REQUEST)
+        # Prefer ID token claims if present and valid; otherwise fetch userinfo
+        user_info = None
+        if id_token:
+            verified = _verify_id_token(id_token, 'google', client_id)
+            if not verified:
+                logger.exception('Google id_token verification failed')
+                return Response({'error': 'Failed to verify id_token'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = verified
+        if not user_info:
+            ui = requests.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={'Authorization': f'Bearer {access_token}'}, timeout=10)
+            if ui.status_code != 200:
+                logger.exception('Failed to fetch Google userinfo: %s', ui.text)
+                return Response({'error': 'Failed to fetch userinfo'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = ui.json()
+
+        email = user_info.get('email')
+        # Respect state: if client requested login and user doesn't exist, redirect to signup page
+        state = (request.GET.get('state') or '').lower()
+        frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+        if state == 'login' and not CustomUser.objects.filter(email__iexact=email).exists():
+            # Redirect user to frontend registration flow with prefilled email
+            redirect_to = frontend_base.rstrip('/') + '/register/?' + urlencode({'email': email})
+            return HttpResponseRedirect(redirect_to)
+        name = user_info.get('name') or ''
+        picture = user_info.get('picture')
+        parts = name.split(maxsplit=1) if name else []
+        first_name = parts[0] if parts else email.split('@')[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+
+        user = CustomUser.objects.filter(email__iexact=email).first()
+        created = False
+        if not user:
+            password = CustomUser.objects.make_random_password()
+            user = CustomUser.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                manager_admin_status='Client'
+            )
+            created = True
+
+        # update picture
+        if picture:
+            try:
+                _save_profile_image_from_url(user, picture)
+            except Exception:
+                logger.exception('Failed to save google profile image')
+
+        # Update last-login info and log activity
+        try:
+            user.last_login_at = timezone.now()
+            user.last_login_ip = get_client_ip(request)
+            user.save(update_fields=['last_login_at', 'last_login_ip'])
+        except Exception:
+            logger.exception('Failed to update last_login info for google oauth')
+
+        try:
+            ActivityLog.objects.create(
+                user=user,
+                activity="User login via Google OAuth",
+                ip_address=get_client_ip(request),
+                endpoint=request.path,
+                activity_type="login",
+                activity_category="client",
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now(),
+                related_object_id=user.id,
+                related_object_type="OAuthLogin"
+            )
+        except Exception:
+            logger.exception('Failed to create ActivityLog for Google OAuth login')
+
+        # Issue tokens and set cookies, then redirect to frontend
+        refresh = RefreshToken.for_user(user)
+        try:
+            refresh['aud'] = 'client.vtindex'
+            refresh['scope'] = 'client:*'
+            access = refresh.access_token
+            access['aud'] = 'client.vtindex'
+            access['scope'] = 'client:*'
+        except Exception:
+            access = refresh.access_token
+
+        access_token_str = str(access)
+        frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+        redirect_to = frontend_base.rstrip('/') + '/dashboard/'
+
+        resp = HttpResponseRedirect(redirect_to)
+        secure_flag = not settings.DEBUG
+        try:
+            access_lifetime = getattr(settings, 'SIMPLE_JWT', {}).get('ACCESS_TOKEN_LIFETIME', None)
+            access_max_age = int(access_lifetime.total_seconds()) if access_lifetime else None
+        except Exception:
+            access_max_age = None
+
+        resp.set_cookie('jwt_token', access_token_str, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+        resp.set_cookie('access_token', access_token_str, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+        resp.set_cookie('refresh_token', str(refresh), httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=None)
+        resp.set_cookie('role', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+        resp.set_cookie('UserRole', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+
+        return resp
+    except Exception:
+        logger.exception('google_oauth_callback failed')
+        return Response({'error': 'Google oauth callback failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def microsoft_oauth_callback(request):
+    """Server-side callback to handle Microsoft authorization-code exchange."""
+    code = request.GET.get('code')
+    if not code:
+        return Response({'error': 'Missing code'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        client_id = getattr(settings, 'MICROSOFT_OAUTH_CLIENT_ID', None) or os.environ.get('MICROSOFT_OAUTH_CLIENT_ID')
+        client_secret = getattr(settings, 'MICROSOFT_OAUTH_CLIENT_SECRET', None) or os.environ.get('MICROSOFT_OAUTH_CLIENT_SECRET')
+        tenant = getattr(settings, 'MICROSOFT_OAUTH_TENANT_ID', None) or os.environ.get('MICROSOFT_OAUTH_TENANT_ID') or 'common'
+        if not client_id or not client_secret:
+            return Response({'error': 'Microsoft OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
+
+        redirect_uri = request.build_absolute_uri()
+        token_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token'
+        data = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'code': code,
+            'redirect_uri': redirect_uri,
+            'grant_type': 'authorization_code'
+        }
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        r = requests.post(token_url, data=data, headers=headers, timeout=10)
+        if r.status_code != 200:
+            logger.exception('Microsoft token exchange failed: %s', r.text)
+            return Response({'error': 'Failed to exchange code for token'}, status=status.HTTP_400_BAD_REQUEST)
+        token_json = r.json()
+        access_token = token_json.get('access_token')
+        id_token = token_json.get('id_token')
+        if not access_token and not id_token:
+            return Response({'error': 'No access_token from Microsoft'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # If id_token present, verify and prefer its claims; otherwise we'll fetch Graph
+        user_info = None
+        if id_token:
+            verified = _verify_id_token(id_token, 'microsoft', client_id, tenant=tenant)
+            if verified:
+                user_info = verified
+
+        # Validate state nonce (CSRF-like)
+        state_raw = request.GET.get('state') or ''
+        try:
+            action = None
+            if ':' in state_raw:
+                action, nonce = state_raw.rsplit(':', 1)
+            else:
+                action = state_raw
+                nonce = None
+            session_nonce = request.session.get('oauth_state_nonce_microsoft')
+            if session_nonce:
+                if not nonce or nonce != session_nonce:
+                    logger.warning('OAuth state nonce mismatch for Microsoft')
+                    return Response({'error': 'Invalid oauth state'}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    del request.session['oauth_state_nonce_microsoft']
+                    request.session.modified = True
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception('Failed to validate oauth state for Microsoft')
+            return Response({'error': 'Invalid oauth state'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # fetch userinfo only if id_token didn't provide claims
+        if not user_info:
+            ui = requests.get('https://graph.microsoft.com/v1.0/me', headers={'Authorization': f'Bearer {access_token}'}, timeout=10)
+            if ui.status_code != 200:
+                logger.exception('Failed to fetch Microsoft userinfo: %s', ui.text)
+                return Response({'error': 'Failed to fetch userinfo'}, status=status.HTTP_400_BAD_REQUEST)
+            user_info = ui.json()
+
+        email = user_info.get('mail') or user_info.get('userPrincipalName')
+        # Respect state: if client requested login and user doesn't exist, redirect to signup page
+        state = (request.GET.get('state') or '').lower()
+        frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+        if state == 'login' and not CustomUser.objects.filter(email__iexact=email).exists():
+            redirect_to = frontend_base.rstrip('/') + '/register/?' + urlencode({'email': email})
+            return HttpResponseRedirect(redirect_to)
+        name = user_info.get('displayName') or ''
+        parts = name.split(maxsplit=1) if name else []
+        first_name = parts[0] if parts else email.split('@')[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+
+        user = CustomUser.objects.filter(email__iexact=email).first()
+        created = False
+        if not user:
+            password = CustomUser.objects.make_random_password()
+            user = CustomUser.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                manager_admin_status='Client'
+            )
+            created = True
+
+        # Update last-login info and log activity
+        try:
+            user.last_login_at = timezone.now()
+            user.last_login_ip = get_client_ip(request)
+            user.save(update_fields=['last_login_at', 'last_login_ip'])
+        except Exception:
+            logger.exception('Failed to update last_login info for microsoft oauth')
+
+        try:
+            ActivityLog.objects.create(
+                user=user,
+                activity="User login via Microsoft OAuth",
+                ip_address=get_client_ip(request),
+                endpoint=request.path,
+                activity_type="login",
+                activity_category="client",
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now(),
+                related_object_id=user.id,
+                related_object_type="OAuthLogin"
+            )
+        except Exception:
+            logger.exception('Failed to create ActivityLog for Microsoft OAuth login')
+
+        # Issue tokens and set cookies, then redirect to frontend
+        refresh = RefreshToken.for_user(user)
+        try:
+            refresh['aud'] = 'client.vtindex'
+            refresh['scope'] = 'client:*'
+            access = refresh.access_token
+            access['aud'] = 'client.vtindex'
+            access['scope'] = 'client:*'
+        except Exception:
+            access = refresh.access_token
+
+        access_token_str = str(access)
+        frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
+        redirect_to = frontend_base.rstrip('/') + '/dashboard/'
+
+        resp = HttpResponseRedirect(redirect_to)
+        secure_flag = not settings.DEBUG
+        try:
+            access_lifetime = getattr(settings, 'SIMPLE_JWT', {}).get('ACCESS_TOKEN_LIFETIME', None)
+            access_max_age = int(access_lifetime.total_seconds()) if access_lifetime else None
+        except Exception:
+            access_max_age = None
+
+        resp.set_cookie('jwt_token', access_token_str, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+        resp.set_cookie('access_token', access_token_str, httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=access_max_age)
+        resp.set_cookie('refresh_token', str(refresh), httponly=True, secure=secure_flag, samesite='Strict', path='/', max_age=None)
+        resp.set_cookie('role', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+        resp.set_cookie('UserRole', 'client', httponly=False, secure=secure_flag, samesite='Lax', path='/')
+
+        return resp
+    except Exception:
+        logger.exception('microsoft_oauth_callback failed')
+        return Response({'error': 'Microsoft oauth callback failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @csrf_exempt
 @api_view(['POST'])
