@@ -1,0 +1,1539 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="csrf-token" content="{{ csrf_token }}" />
+<title>PAMM — Client</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: transparent; --panel:#161a22; --muted:#a5adbb; --primary:#ffd400; --danger:#ff4d4f; --ok:#22c55e; --border:#242a35;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:#fff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial}
+  .container{max-width:1400px;margin:0 auto;padding:28px 16px;width:95%}
+  @media(min-width:1200px){
+    .container{padding:32px 24px}
+  }
+  .title{font-weight:700;text-align:center;margin:6px 0 18px;font-size:26px}
+  .tabs{display:flex;gap:8px;border-bottom:1px solid var(--border);padding-bottom:8px;flex-wrap:wrap}
+  .tab{padding:10px 16px;border-radius:10px 10px 0 0;background:#12151c;color:#cbd5e1;border:1px solid transparent;cursor:pointer}
+  .tab.active{background:var(--primary);color:#111827;font-weight:700}
+  .modal-tab{padding:8px 12px;border-radius:8px;background:#0f141c;color:#cbd5e1;border:1px solid transparent;cursor:pointer}
+  .modal-tab.active{background:var(--primary);color:#111827;font-weight:700}
+  .bar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:16px 0 18px}
+  .btn{background:var(--primary);color:#111827;border:none;border-radius:12px;padding:10px 14px;font-weight:700;cursor:pointer}
+  .btn.secondary{background:#1f2430;color:#e5e7eb;border:1px solid var(--border)}
+  .btn.danger{background:var(--danger);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:20px}
+  /* cards: two-column on desktop, full width on mobile */
+  .card{grid-column:span 12;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:14px;padding:18px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 6px 18px rgba(0,0,0,0.35);transition:transform .18s ease,box-shadow .18s ease}
+  @media(min-width:1200px){
+    /* default card width on desktop (used for available list) */
+    .card{grid-column:span 4}
+  /* make manager and investment cards full width on desktop */
+  #managerList .card, #investmentList .card { grid-column: span 12 }
+    /* ensure available list cards remain at third width for better layout */
+    #availableList .card { grid-column: span 4 }
+  }
+  @media(min-width:900px) and (max-width:1199px){
+    /* default card width on medium screens (used for available list) */
+    .card{grid-column:span 6}
+  /* make manager and investment cards full width on medium screens */
+  #managerList .card, #investmentList .card { grid-column: span 12 }
+    /* ensure available list cards remain at half width */
+    #availableList .card { grid-column: span 6 }
+  }
+  .card:hover{transform:translateY(-6px);box-shadow:0 14px 30px rgba(0,0,0,0.5)}
+  .row{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+  @media(min-width:1200px){
+    .row{gap:24px}
+  }
+  .kpi{flex:1;min-width:180px;background:linear-gradient(180deg,#0f1318,#12151c);border-radius:12px;padding:16px 18px;color:#e5e7eb;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;border:1px solid rgba(255,255,255,0.02)}
+  .kpi span{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .kpi strong{font-size:18px}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  .muted{color:var(--muted)}
+  .right{margin-left:auto}
+  .search{display:flex;gap:10px}
+  input,select{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);color:#e5e7eb;padding:10px;border-radius:10px;outline:none;transition:box-shadow .12s ease,border-color .12s ease}
+  input:focus,select:focus{box-shadow:0 6px 18px rgba(0,0,0,0.45) inset;border-color:rgba(255,255,255,0.06)}
+  ::placeholder{color:#93a0b3}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{border-bottom:1px solid var(--border);padding:10px;text-align:left}
+  th{color:#cbd5e1;font-weight:600}
+  .hidden{display:none}
+  /* modal */
+  .modal-backdrop{position:fixed;inset:0;background:linear-gradient(rgba(2,6,23,0.6),rgba(2,6,23,0.6));display:none;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal{background:linear-gradient(180deg,var(--panel), rgba(22,26,34,0.95));border-radius:14px;max-width:720px;width:100%;padding:20px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 20px 50px rgba(2,6,23,0.7);transform-origin:center;transition:transform .18s ease,opacity .18s ease}
+  .modal-backdrop[style*="display:flex"] .modal{transform:translateY(0);opacity:1}
+  .modal h3{margin:0 0 8px}
+  .modal .row{gap:10px}
+  /* hide legacy popup sections (deposit/withdraw) by default; JS can open them when needed */
+  .popup-section{display:none}
+
+  /* buttons */
+  .btn{box-shadow:0 6px 18px rgba(0,0,0,0.35);transition:transform .12s ease,box-shadow .12s ease}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,0.45)}
+  .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:#d6dbe6}
+  .btn.danger{box-shadow:none}
+
+  /* deposit box */
+  .deposit-box-btn{background:var(--primary);color:#111827;border:none;padding:8px 12px;border-radius:10px;font-weight:700;cursor:pointer}
+  .deposit-box-btn:hover{opacity:.95}
+
+  /* small helpers */
+  .address-box{background:#0b1220;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);font-family:monospace}
+  .copy-btn{display:inline-block;margin-top:8px;cursor:pointer;color:var(--primary)}
+  
+  /* Empty state improvements */
+  .empty-state{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding: 15px 15px;
+    background:linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+    border-radius:16px;
+    border:2px dashed rgba(255,255,255,0.1);
+    margin:20px 0;
+    min-height:320px;
+    min-width: 1350px;
+  }
+  .empty-icon{
+    font-size:64px;
+    margin-bottom:24px;
+    opacity:0.6;
+    background:linear-gradient(135deg, var(--primary), #ffed4a);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    background-clip:text;
+  }
+  .empty-title{
+    font-size:24px;
+    font-weight:700;
+    margin-bottom:12px;
+    color:#e5e7eb;
+  }
+  .empty-desc{
+    font-size:16px;
+    color:var(--muted);
+    margin-bottom:32px;
+    max-width:480px;
+    line-height:1.5;
+  }
+  .empty-actions{
+    display:flex;
+    gap:16px;
+    flex-wrap:wrap;
+    justify-content:center;
+  }
+  .empty-btn{
+    background:linear-gradient(135deg, var(--primary), #ffed4a);
+    color:#111827;
+    border:none;
+    border-radius:12px;
+    padding:14px 24px;
+    font-weight:700;
+    cursor:pointer;
+    transition:all 0.2s ease;
+    box-shadow:0 4px 16px rgba(255, 212, 0, 0.2);
+  }
+  .empty-btn:hover{
+    transform:translateY(-2px);
+    box-shadow:0 8px 24px rgba(255, 212, 0, 0.3);
+  }
+  .empty-btn.secondary{
+    background:rgba(255,255,255,0.05);
+    color:#e5e7eb;
+    box-shadow:0 4px 16px rgba(0,0,0,0.2);
+  }
+  .empty-btn.secondary:hover{
+    background:rgba(255,255,255,0.08);
+    box-shadow:0 8px 24px rgba(0,0,0,0.3);
+  }
+  .empty-features{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+    gap:20px;
+    margin-top:40px;
+    max-width:800px;
+  }
+  .empty-feature{
+    background:rgba(255,255,255,0.02);
+    border-radius:12px;
+    padding:20px;
+    text-align:center;
+    border:1px solid rgba(255,255,255,0.05);
+  }
+  .empty-feature-icon{
+    font-size:32px;
+    margin-bottom:12px;
+    color:var(--primary);
+  }
+  .empty-feature-title{
+    font-weight:600;
+    margin-bottom:6px;
+    color:#e5e7eb;
+  }
+  /* Mobile responsive tweaks */
+  @media (max-width: 767px) {
+    html,body{font-size:14px}
+    .container{padding:18px 12px;width:100%;max-width:100%}
+    .title{font-size:20px;margin-bottom:8px}
+    .tabs{gap:6px}
+    .tab{padding:8px 10px;font-size:14px;border-radius:10px}
+    .bar{flex-direction:column;align-items:flex-start;gap:10px}
+    .search{width:100%}
+    .search input{width:100%}
+    .grid{grid-template-columns:repeat(1,1fr);gap:12px}
+    .card{padding:14px;border-radius:12px}
+    #availableList .card, .card{grid-column:span 12}
+    #managerList .card, #investmentList .card{grid-column:span 12}
+    .kpi{min-width:120px;padding:10px}
+    .kpi strong{font-size:16px}
+    .empty-state{min-width: 0px;}
+    .empty-desc{font-size:15px;max-width:100%}
+    .empty-features{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;max-width:100%}
+    .empty-btn{padding:12px 16px;border-radius:10px;font-size:14px}
+    .actions{flex-direction:column;align-items:stretch}
+    input,select{font-size:15px;padding:10px}
+  }
+  .empty-feature-desc{
+    font-size:14px;
+    color:var(--muted);
+  }
+  /* Notification style (match login page notification) */
+  .notification { position: fixed; top: 20px; right: 20px; background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 15px 20px; border-radius: 10px; box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3); font-weight: bold; font-size: 14px; z-index: 10000; transform: translateX(400px); opacity: 0; transition: all 0.3s ease-in-out; display: flex; align-items: center; gap: 10px; }
+  .notification.show { transform: translateX(0); opacity: 1; }
+  .notification.success { background: linear-gradient(135deg, #28a745, #20c997); box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3); }
+  .notification.error { background: linear-gradient(135deg, #dc3545, #e74c3c); box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3); }
+  .notification-icon { font-size: 16px; }
+  .notification-close { background: none; border: none; color: white; font-size: 16px; cursor: pointer; margin-left: auto; padding: 0; opacity: 0.8; }
+  .notification-close:hover { opacity: 1; }
+
+  /* List animation helpers */
+  .list-fade{transition:opacity .35s ease,transform .35s ease}
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="title">PAMM — Client Portal</div>
+
+    <!-- Tabs -->
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="manager">PAMM Manager Accounts</button>
+      <button class="tab" data-tab="available">Available PAMM Accounts</button>
+    </div>
+
+    <!-- Manager Tab -->
+    <section id="manager" class="tab-panel">
+      <div class="bar">
+        <div class="search">
+          <input id="mgrSearch" placeholder="Search my PAMM accounts…" />
+        </div>
+        <div class="right">
+          <button class="btn" id="btnOpenCreate">+ Create New PAMM Manager Account</button>
+        </div>
+      </div>
+
+      <div id="managerList" class="grid"><!-- filled by JS --></div>
+    </section>
+
+    <section id="available" class="tab-panel hidden">
+      <div class="bar">
+        <div class="search">
+          <input id="invSearch" placeholder="Search my investments…" />
+        </div>
+        <div class="right">
+          <button class="btn" id="investments">My Investments</button>
+        </div>
+      </div>
+      <div id="availableList" class="grid"><!-- filled by JS --></div>
+      <div id="investmentList" class="grid"><!-- filled by JS --></div>
+    </section>
+  </div>
+  <!-- Notifications will be created dynamically to match site-wide style -->
+
+    <!-- Create PAMM Modal -->
+  <div class="modal-backdrop" id="createModal">
+    <div class="modal">
+      <h3>Create PAMM Account</h3>
+      <p class="muted">You will be the manager of this pool.</p>
+      <div class="row">
+        <input id="mgrName" placeholder="Display Name for this PAMM" style="flex:1">
+        <input id="mgrProfitShare" type="number" min="0" max="100" step="0.01" placeholder="Profit Share % (e.g., 40)">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <select id="mgrLeverage" style="flex:1">
+          <option value="">Select Leverage</option>
+          <option value="50">1:50</option>
+          <option value="100">1:100</option>
+          <option value="200">1:200</option>
+          <option value="300">1:300</option>
+          <option value="400">1:400</option>
+          <option value="500">1:500</option>
+          <option value="1000">1:1000</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1; position:relative; display:flex; align-items:center">
+          <input id="mgrMasterPassword" type="password" placeholder="Master Password" style="flex:1; padding-right:35px">
+          <button type="button" onclick="togglePassword('mgrMasterPassword', this)" style="position:absolute; right:8px; background:none; border:none; color:#cbd5e1; cursor:pointer; font-size:14px">👁</button>
+        </div>
+        <div style="flex:1; position:relative; display:flex; align-items:center">
+          <input id="mgrInvestPassword" type="password" placeholder="Invest Password" style="flex:1; padding-right:35px">
+          <button type="button" onclick="togglePassword('mgrInvestPassword', this)" style="position:absolute; right:8px; background:none; border:none; color:#cbd5e1; cursor:pointer; font-size:14px">👁</button>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn" id="btnCreate">Create</button>
+        <button class="btn secondary" data-close="#createModal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Invest Modal -->
+  <div class="modal-backdrop" id="investModal">
+    <div class="modal">
+      <h3>Invest in a PAMM Account</h3>
+      <div class="row">
+        <input id="investorName" placeholder="Investor Name" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="investPammId" placeholder="MT5 Account ID" readonly style="background:rgba(255,255,255,0.01); color:#9ca3af; cursor:not-allowed;">
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn" id="btnInvest">Invest</button>
+        <button class="btn secondary" data-close="#investModal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+<div class="modal-backdrop" id="quickDeposit">
+  <div class="modal">
+    <h3>Deposit Funds</h3>
+    <!-- embedded full deposit UI -->
+    <div style="margin-top:12px">
+      <div class="tabs" style="display:flex;gap:8px;margin:10px 0">
+        <div class="modal-tab active" data-tab="q-cheesepay">CheesePay</div>
+        <div class="modal-tab" data-tab="q-manual">Manual Deposit</div>
+        <div class="modal-tab" data-tab="q-usdt">USDT (TRC20)</div>
+      </div>
+      <div id="q-cheesepay" class="tab-content">
+        <div class="deposit-radio-group">
+          <label><input type="radio" name="q-cp-currency" value="USD" checked onchange="updateCPConversion()"> USD</label>
+          <label><input type="radio" name="q-cp-currency" value="INR" onchange="updateCPConversion()"> INR</label>
+        </div>
+        <div class="deposit-label" id="q-cpLabelUSD">USD Amount (USD)</div>
+        <input class="input-text-file" type="text" id="q-cpInput" placeholder="Enter amount" oninput="updateCPConversion()">
+        <input class="input-text-file convert-disabled" type="text" id="q-cpConverted" disabled>
+        <div style="margin-top:8px"><button class="deposit-box-btn">Confirm & Proceed</button></div>
+      </div>
+      <div id="q-manual" class="tab-content hidden" style="margin-top:10px">
+        <!-- <div class="manual-deposit-card" style="margin-bottom:12px;padding:12px;border-radius:8px;background:rgba(255,255,255,0.02)">
+          <div style="font-weight:700">Manual Bank Deposit</div>
+          <div style="margin-top:8px">
+            <div><strong>AC NAME:</strong> WEALTH ENTERPRISES</div>
+            <div><strong>BANK:</strong> FEDERAL BANK</div>
+            <div><strong>Account No:</strong> 15840200006783</div>
+            <div><strong>IFSC:</strong> FDRL0001584</div>
+            <div><strong>BRANCH:</strong> SATARA</div>
+            <div><strong>TYPE:</strong> Current</div>
+            <div style="margin-top:6px"><strong>UPI ID:</strong> biz.wealthen623@fbl</div>
+          </div>
+        </div> -->
+    <div class="manual-deposit-form">
+          <div class="deposit-radio-group" style="margin-bottom:8px">
+            <label><input type="radio" name="q-manual-currency" value="USD" checked onchange="updateManualConversion()"> USD</label>
+            <label><input type="radio" name="q-manual-currency" value="INR" onchange="updateManualConversion()"> INR</label>
+          </div>
+          <input class="input-text-file" type="text" id="q-manualInput" placeholder="Enter amount" oninput="updateManualConversion()" style="margin-bottom:8px">
+          <input class="input-text-file convert-disabled" type="text" id="q-manualConverted" disabled style="margin-bottom:8px">
+          <input id="q-manual-file" class="input-text-file" type="file" style="margin-bottom:8px">
+          <div><button class="btn" id="q-manual-submit">Submit</button></div>
+        </div>
+      </div>
+      <div id="q-usdt" class="tab-content hidden" style="margin-top:10px">
+        <p>Send USDT (TRC20) payment to:</p>
+        <div class="address-box" id="q-usdtAddress">0x9454dE6F92195D5C9a37C8F6aDB7382ba150C07A</div>
+        <div class="copy-btn" onclick="copyAddress()">📋 Copy Address</div>
+  <input id="q-usdt-input" class="input-text-file" type="text" placeholder="USD Amount (USDT)" style="margin-top:8px">
+  <input id="q-usdt-file" class="input-text-file" type="file" style="margin-top:8px">
+  <div style="margin-top:8px"><button class="btn" id="q-usdt-submit">Submit</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal-backdrop" id="quickWithdraw">
+  <div class="modal">
+    <h3>Withdraw Funds</h3>
+    <div style="margin-top:12px">
+      <div class="info-box">
+        <label class="with-lable">Account ID</label>
+        <div class="info-value">
+          <select id="withdraw-account-select" onchange="updateWithdrawAccountInfo()">
+            <option value="">-- Select Account --</option>
+          </select>
+        </div>
+      </div>
+      <div class="info-box" style="margin-top:8px">
+        <label class="with-lable">Available Balance</label>
+        <div class="info-value-balance">$<span id="with_bal"></span></div>
+      </div>
+      <p id="tit-withdraw-method" style="margin-top:8px">Select Withdrawal Method:</p>
+      <div class="withdraw-tabs" style="margin-top:6px">
+        <div class="with-tab-buttons">
+          <button class="with-tab-btn active" data-target="q-bank-tab">Bank Transfer</button>
+          <button class="with-tab-btn" data-target="q-crypto-tab">Crypto Wallet</button>
+        </div>
+        <div class="with-tab-content active" id="q-bank-tab" style="margin-top:8px">
+          <strong>Bank Transfer</strong><br>
+          <small class="withdraw_data">Bank Name:</small>
+          <span class="withdraw_data-span" id="with_bank_name"></span><br>
+          <small class="withdraw_data">Account Number:</small>
+          <span class="withdraw_data-span" id="with_account_no"></span><br>
+          <small class="withdraw_data">Branch:</small>
+          <span class="withdraw_data-span" id="with_branch"></span><br>
+          <small class="withdraw_data">IFSC Code:</small>
+          <span class="withdraw_data-span" id="with_ifsc"></span>
+        </div>
+        <div class="with-tab-content" id="q-crypto-tab" style="margin-top:8px">
+          <strong>Crypto Wallet</strong><br>
+          <small class="withdraw_data">Wallet Address:</small>
+          <span class="withdraw_data-span" id="with_wallet_add"></span><br>
+          <small class="withdraw_data">Exchange Name:</small>
+          <span class="withdraw_data-span" id="with_exchange_name"></span>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn" id="btnWithdrawConfirm">Request Withdraw</button>
+        <button class="btn secondary" data-close="#quickWithdraw">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+/* ---------- CONFIG ---------- */
+const API = {
+  managerList:   '/api/pamm/managed/',          // GET
+  userInfo:       '/api/user-info/',            // GET - current user info
+  createPamm:    '/api/pamm/create/',           // POST
+  investmentList:'/api/pamm/investments/',      // GET
+  invest:        '/api/pamm/invest/',           // POST
+  depositCheese: '/cheesepay-initiate/',        // POST (CheesePay initiate)
+  depositManual: '/manual-deposit/',            // POST (manual deposit view)
+  depositUSDT:   '/usdt-deposit/',              // POST (USDT deposit)
+  withdraw:      '/withdraw-request/',         // POST (use client-side WithdrawRequestView)
+  disable:       '/api/pamm/disable/',          // POST
+  available:     '/api/pamm/available/',        // GET
+  leave:         '/api/pamm/leave/'             // POST
+};
+
+// Get CSRF token and authentication headers
+function getHeaders() {
+  const headers = {'Content-Type': 'application/json'};
+  
+  // Get JWT token from URL parameter (for iframe context)
+  const urlParams = new URLSearchParams(window.location.search);
+  const jwtToken = urlParams.get('token');
+  
+  if (jwtToken) {
+    headers['Authorization'] = `Bearer ${jwtToken}`;
+  } else {
+    // Fallback to localStorage
+    const token = localStorage.getItem('jwt_token') || localStorage.getItem('access_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+  
+  // Add CSRF token if available
+  const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value ||
+                   document.querySelector('meta[name=csrf-token]')?.content ||
+                   getCookie('csrftoken');
+  if (csrfToken) {
+    headers['X-CSRFToken'] = csrfToken;
+  }
+  
+  return headers;
+}
+
+// Helper to get cookie value
+function getCookie(name) {
+  let cookieValue = null;
+  if (document.cookie && document.cookie !== '') {
+    const cookies = document.cookie.split(';');
+    for (let i = 0; i < cookies.length; i++) {
+      const cookie = cookies[i].trim();
+      if (cookie.substring(0, name.length + 1) === (name + '=')) {
+        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+        break;
+      }
+    }
+  }
+  return cookieValue;
+}
+
+// Conversion helpers for CheesePay and Manual deposit tabs
+async function fetchUsdInrRate(){
+  try{
+    const r = await fetch('/api/get-usd-inr-rate/', {headers: getHeaders()});
+    if(!r.ok) return null;
+    const j = await r.json();
+    return j.rate || j.usd_inr || null;
+  }catch(e){ return null; }
+}
+
+async function updateCPConversion(){
+  const input = document.getElementById('q-cpInput');
+  const conv = document.getElementById('q-cpConverted');
+  const lbl = document.getElementById('q-cpLabelUSD');
+  if(!input||!conv) return;
+  const val = parseFloat(input.value) || 0;
+  const currency = document.querySelector('input[name="q-cp-currency"]:checked')?.value || 'USD';
+  const rate = await fetchUsdInrRate();
+  if(currency === 'INR'){
+    // show INR converted to USD (assume rate is USD->INR)
+    if(rate) conv.value = (val / rate).toFixed(2) + ' USD';
+    else conv.value = '';
+    lbl.textContent = 'INR Amount (INR)';
+  } else {
+    if(rate) conv.value = (val * rate).toFixed(2) + ' INR';
+    else conv.value = '';
+    lbl.textContent = 'USD Amount (USD)';
+  }
+}
+
+async function updateManualConversion(){
+  const input = document.getElementById('q-manualInput');
+  const conv = document.getElementById('q-manualConverted');
+  if(!input||!conv) return;
+  const val = parseFloat(input.value) || 0;
+  const currency = document.querySelector('input[name="q-manual-currency"]:checked')?.value || 'USD';
+  const rate = await fetchUsdInrRate();
+  if(currency === 'INR'){
+    if(rate) conv.value = (val / rate).toFixed(2) + ' USD';
+    else conv.value = '';
+  } else {
+    if(rate) conv.value = (val * rate).toFixed(2) + ' INR';
+    else conv.value = '';
+  }
+}
+
+// runtime diagnostics: helps confirm script loaded and surface async errors
+window.addEventListener('error', (ev)=>{
+  console.error('pamm: uncaught error', ev.message, ev.filename+':'+ev.lineno);
+});
+window.addEventListener('unhandledrejection', (ev)=>{
+  console.error('pamm: unhandled rejection', ev.reason);
+});
+
+/* ---------- HELPERS ---------- */
+const $ = s => document.querySelector(s);
+const el = (t,cls) => {const n=document.createElement(t); if(cls) n.className=cls; return n;}
+function money(v){return `$ ${Number(v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;}
+function pct(v){return `${Number(v||0).toFixed(2)}%`;}
+
+// Helper functions for empty state navigation
+function switchToManager() {
+  // Switch to manager tab
+  document.querySelector('#tabs .tab[data-tab="manager"]').click();
+}
+
+function switchToAvailable() {
+  // Switch to available tab
+  document.querySelector('#tabs .tab[data-tab="available"]').click();
+  // Make sure available list is shown (not investments)
+  const availableListEl = $('#availableList');
+  const investListEl = $('#investmentList');
+  const investToggle = $('#investments');
+  if(availableListEl && investListEl && investToggle) {
+    availableListEl.style.display = 'grid';
+    investListEl.style.display = 'none';
+    investToggle.textContent = 'My Investments';
+  }
+}
+
+function switchToInvestments(){
+  const availableListEl = $('#availableList');
+  const investListEl = $('#investmentList');
+  const investToggle = $('#investments');
+  if(availableListEl && investListEl && investToggle){
+    availableListEl.style.display = 'none';
+    investListEl.style.display = 'grid';
+    investToggle.textContent = 'Show Available PAMMs';
+  }
+}
+
+// Show a small notification matching the site's login page style
+function showToast(message, opts={type:'success', timeout:3200}){
+  try{
+    // Remove existing notifications (keep single for simplicity, like index.html)
+    const existing = document.querySelector('.notification');
+    if(existing) existing.remove();
+
+    const notification = document.createElement('div');
+    notification.className = `notification ${opts.type||'success'}`;
+    const icon = (opts.type === 'success') ? '✓' : '⚠';
+    notification.innerHTML = `
+      <span class="notification-icon">${icon}</span>
+      <span class="notification-message">${message}</span>
+      <button class="notification-close" aria-label="Close">×</button>
+    `;
+    document.body.appendChild(notification);
+    // show
+    setTimeout(()=> notification.classList.add('show'), 10);
+    // wire close
+    notification.querySelector('.notification-close').addEventListener('click', ()=>{ notification.remove(); });
+    // auto-hide
+    setTimeout(()=>{ if(notification.parentElement){ notification.classList.remove('show'); setTimeout(()=> notification.remove(), 300); } }, opts.timeout||3200);
+  }catch(e){ console.error('showToast error', e); try{ console.error(message); }catch(_){ } }
+}
+
+// Animate switching from Available -> Investments with a fade/slide
+async function animateSwitchToInvestments(){
+  const availableListEl = $('#availableList');
+  const investListEl = $('#investmentList');
+  const investToggle = $('#investments');
+  if(!availableListEl || !investListEl || !investToggle) return switchToInvestments();
+
+  // add helper class for transitions
+  availableListEl.classList.add('list-fade');
+  investListEl.classList.add('list-fade');
+
+  // fade out available list
+  availableListEl.style.transition = 'opacity .35s ease, transform .35s ease';
+  availableListEl.style.opacity = '1';
+  availableListEl.style.transform = 'translateY(0)';
+  await new Promise(r=>requestAnimationFrame(r));
+  availableListEl.style.opacity = '0';
+  availableListEl.style.transform = 'translateY(-8px)';
+  await new Promise(r=>setTimeout(r, 360));
+
+  // perform the actual switch
+  availableListEl.style.display = 'none';
+  investListEl.style.display = 'grid';
+  investToggle.textContent = 'Show Available PAMMs';
+
+  // animate investments in
+  investListEl.style.opacity = '0';
+  investListEl.style.transform = 'translateY(8px)';
+  await new Promise(r=>requestAnimationFrame(r));
+  investListEl.style.transition = 'opacity .35s ease, transform .35s ease';
+  investListEl.style.opacity = '1';
+  investListEl.style.transform = 'translateY(0)';
+  // load investments data (non-blocking)
+  loadInvestments().catch(e=>console.error('loadInvestments after switch failed', e));
+}
+
+// Password toggle function
+function togglePassword(inputId, button) {
+  const input = document.getElementById(inputId);
+  if (input.type === 'password') {
+    input.type = 'text';
+    button.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    button.textContent = '👁';
+  }
+}
+
+// In-page confirmation modal helper: returns a Promise<boolean>
+// In-page confirmation modal helper: creates a top-level modal and returns Promise<boolean>
+function showConfirm(message, title){
+  return new Promise((resolve)=>{
+    try{
+      // create backdrop
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.style.display = 'flex';
+      backdrop.style.zIndex = 20000; // ensure it's above other elements
+      // ensure pointer events
+      backdrop.style.pointerEvents = 'auto';
+
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.style.maxWidth = '420px';
+
+      const h = document.createElement('h3');
+      h.textContent = title || 'Please confirm';
+      const body = document.createElement('div');
+      body.style.marginTop = '8px';
+      body.style.color = 'var(--muted)';
+      body.textContent = message || '';
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.style.marginTop = '14px';
+      actions.style.justifyContent = 'flex-end';
+
+      const yes = document.createElement('button'); yes.className='btn'; yes.textContent='Yes';
+      const no = document.createElement('button'); no.className='btn secondary'; no.textContent='Cancel';
+      actions.appendChild(yes); actions.appendChild(no);
+
+      modal.appendChild(h); modal.appendChild(body); modal.appendChild(actions);
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+
+      const cleanup = ()=>{ try{ document.body.removeChild(backdrop); }catch(e){} };
+      yes.onclick = ()=>{ cleanup(); resolve(true); };
+      no.onclick = ()=>{ cleanup(); resolve(false); };
+      // click outside closes as cancel
+      backdrop.addEventListener('click', (ev)=>{ if(ev.target === backdrop){ cleanup(); resolve(false); } });
+      // Escape key
+      const onKey = (ev)=>{ if(ev.key === 'Escape'){ cleanup(); resolve(false); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+    }catch(e){ console.error('showConfirm error', e); resolve(confirm(message)); }
+  });
+}
+
+/* ---------- TABS (page-level only) ---------- */
+// only bind the top-level page tabs (inside #tabs). inner modal tabs use separate handlers.
+document.querySelectorAll('#tabs .tab').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
+    const target = document.getElementById(btn.dataset.tab);
+    if(target) target.classList.remove('hidden');
+    // Lazy-load data for the activated tab to avoid unnecessary API calls
+    try{
+      const tab = btn.dataset.tab;
+      if(tab === 'manager'){
+        loadManagerList();
+      } else if(tab === 'available'){
+        // Load available list only when user opens the Available tab
+        loadAvailableList();
+        // Don't auto-load investments here; the user can toggle investments via the My Investments button
+      }
+    }catch(e){ console.error('Error loading tab data', e); }
+  });
+});
+
+/* ---------- MODALS ---------- */
+function openModal(sel){document.querySelector(sel).style.display='flex';}
+function closeModal(sel){document.querySelector(sel).style.display='none';}
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
+const _btnOpenCreate = $('#btnOpenCreate'); if(_btnOpenCreate) _btnOpenCreate.onclick = ()=>openModal('#createModal');
+
+/* ---------- RENDER: MANAGER LIST ---------- */
+async function loadManagerList(q=''){
+  const wrap = $('#managerList'); wrap.innerHTML='';
+  try{
+    // Add timestamp to prevent caching and ensure fresh data
+    const timestamp = Date.now();
+    const url = `${API.managerList}?_t=${timestamp}`;
+    const r = await fetch(url, {headers: getHeaders()});
+    if (!r.ok) {
+      if (r.status === 401) {
+        wrap.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🔐</div>
+            <div class="empty-title">Authentication Required</div>
+            <div class="empty-desc">Please log in to view and manage your PAMM accounts. Your session may have expired.</div>
+            <div class="empty-actions">
+              <button class="empty-btn" onclick="location.href='/login'">Login</button>
+              <button class="empty-btn secondary" onclick="location.reload()">Refresh</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+      throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+    }
+    const data = await r.json();
+    if (data.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">👨‍💼</div>
+          <div class="empty-title">No PAMM Manager Accounts</div>
+          <div class="empty-desc">Start your journey as a PAMM manager! Create your first PAMM account to manage investor funds and earn profit sharing.</div>
+          <div class="empty-actions">
+            <button class="empty-btn" onclick="openModal('#createModal')">Create Your First PAMM Account</button>
+          </div>
+          <div class="empty-features">
+            <div class="empty-feature">
+              <div class="empty-feature-icon">💰</div>
+              <div class="empty-feature-title">Profit Sharing</div>
+              <div class="empty-feature-desc">Earn percentage of profits from managing investor funds</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">📈</div>
+              <div class="empty-feature-title">Professional Tools</div>
+              <div class="empty-feature-desc">Access advanced trading tools and analytics</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">🎯</div>
+              <div class="empty-feature-title">Risk Management</div>
+              <div class="empty-feature-desc">Set leverage and manage risk for optimal performance</div>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+    data.filter(x=>x.name.toLowerCase().includes(q.toLowerCase()))
+        .forEach(x=>wrap.appendChild(managerCard(x)));
+  }catch(e){
+    console.error('Error loading manager list:', e);
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">Unable to Load PAMM Accounts</div>
+        <div class="empty-desc">We're having trouble loading your PAMM accounts. Please check your connection and try again.</div>
+        <div class="empty-actions">
+          <button class="empty-btn" onclick="loadManagerList()">Try Again</button>
+          <button class="empty-btn secondary" onclick="location.reload()">Refresh Page</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+function managerCard(x){
+  const c = el('div','card');
+  c.innerHTML = `
+    <div class="row">
+      <div>
+        <div style="font-weight:700">${x.name}</div><br>
+        <div class="muted">MT5 Account: ${x.mt5_login || 'Pending'}</div>
+      </div>
+      <div class="kpi"><span>Profit Sharing</span>${pct(x.profit_share)}</div>
+      <div class="kpi"><span>Pool Balance</span>${money(x.pool_balance)}</div>
+      <div class="kpi"><span>Total Profit</span>${money(x.total_profit)}</div>
+      <div class="kpi"><span>Leverage</span>${x.leverage}x</div>
+      <div class="right muted">${x.enabled ? '• Enabled':'• Disabled'}</div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-act="deposit">💳 Deposit</button>
+      <button class="btn" data-act="withdraw">🏧 Withdraw</button>
+      <button class="btn" data-act="investors">👥 Investors</button>
+      <button class="btn" data-act="settings">⚙️ Settings</button>
+      <button class="btn danger right" data-act="disable">${x.enabled ? '✖ Disable' : 'Enable'}</button>
+    </div>`;
+  c.querySelector('[data-act="deposit"]').onclick  = ()=>showToast('Deposit functionality coming soon', {type:'info'});
+  c.querySelector('[data-act="withdraw"]').onclick = ()=>showToast('Withdraw functionality coming soon', {type:'info'});
+  c.querySelector('[data-act="disable"]').onclick  = async ()=>{
+    try{
+      const confirmMsg = x.enabled ? 'Are you sure you want to disable this PAMM account?' : 'Are you sure you want to enable this PAMM account?';
+      const confirmed = await showConfirm(confirmMsg, 'Confirm');
+      if(!confirmed) return;
+      // Call API and wait for result, handle errors explicitly
+      const res = await post(API.disable, { pamm_id: x.id, enabled: !x.enabled });
+      // If API returned a failure object, show it
+      if(res && res.success === false){
+        if(res.status === 401) return showToast('Please login to perform this action.', {type:'error'});
+        if(res.status === 403) return showToast('You do not have permission to perform this action.', {type:'error'});
+        return showToast(res.error || res.message || 'Failed to update PAMM status', {type:'error'});
+      }
+      // success - refresh list
+      await loadManagerList();
+    }catch(err){
+      console.error('Disable/enable error', err);
+      showToast('Failed to update PAMM status. Please try again.', {type:'error'});
+      // attempt to refresh to restore UI state
+      try{ await loadManagerList(); }catch(e){ console.error('Refresh after error failed', e); }
+    }
+  };
+  c.querySelector('[data-act="investors"]').onclick= ()=>showToast('Investors view coming soon', {type:'info'});
+  c.querySelector('[data-act="settings"]').onclick  = ()=>showToast('Settings coming soon', {type:'info'});
+  // open deposit modal as client for this PAMM (client panel uses 'client' role)
+  c.querySelector('[data-act="deposit"]').onclick  = ()=> openDepositModal({ role: 'client', pamm_id: x.id, mt5: x.mt5_login });
+  // open withdraw modal as client for this PAMM
+  c.querySelector('[data-act="withdraw"]').onclick = ()=> openWithdrawModal({ role: 'client', pamm_id: x.id, mt5: x.mt5_login });
+  return c;
+}
+
+/* ---------- RENDER: INVESTMENT LIST ---------- */
+async function loadInvestments(q=''){
+  const wrap = $('#investmentList'); wrap.innerHTML='';
+  try{
+    const r = await fetch(API.investmentList, {headers: getHeaders()});
+    if (!r.ok) {
+      if (r.status === 401) {
+        wrap.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🔐</div>
+            <div class="empty-title">Authentication Required</div>
+            <div class="empty-desc">Please log in to view your investment portfolio. Your session may have expired.</div>
+            <div class="empty-actions">
+              <button class="empty-btn" onclick="location.href='/login'">Login</button>
+              <button class="empty-btn secondary" onclick="location.reload()">Refresh</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+      throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+    }
+    const data = await r.json();
+    if (data.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">💎</div>
+          <div class="empty-title">No Active Investments</div>
+          <div class="empty-desc">You haven't invested in any PAMM accounts yet. Browse available PAMM managers and start investing to grow your portfolio.</div>
+          <div class="empty-actions">
+            <button class="empty-btn" onclick="switchToAvailable()">Browse Available PAMMs</button>
+              <button class="empty-btn secondary" onclick="(function(){ showToast('Investment tips and strategies', {type:'info', timeout:4200}); })()">Investment Guide</button>
+          </div>
+          <div class="empty-features">
+            <div class="empty-feature">
+              <div class="empty-feature-icon">🚀</div>
+              <div class="empty-feature-title">Diversify Portfolio</div>
+              <div class="empty-feature-desc">Invest across multiple PAMM managers to spread risk</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">💹</div>
+              <div class="empty-feature-title">Professional Management</div>
+              <div class="empty-feature-desc">Let experienced traders manage your investments</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">⚡</div>
+              <div class="empty-feature-title">Real-time Tracking</div>
+              <div class="empty-feature-desc">Monitor your investments and profits in real-time</div>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+    data.filter(x=>(`${x.pam_account_name} ${x.manager_name} ${x.pamm_mt5_login}`).toLowerCase().includes(q.toLowerCase()))
+        .forEach(x=>wrap.appendChild(investmentCard(x)));
+  }catch(e){
+    console.error('Error loading investments:', e);
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">Unable to Load Investments</div>
+        <div class="empty-desc">We're having trouble loading your investment data. Please check your connection and try again.</div>
+        <div class="empty-actions">
+          <button class="empty-btn" onclick="loadInvestments()">Try Again</button>
+          <button class="empty-btn secondary" onclick="switchToAvailable()">Browse PAMMs</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+function investmentCard(x){
+  const c = el('div','card');
+  c.innerHTML = `
+    <div class="row">
+      <div>
+        <div style="font-weight:700"> Manager : ${x.pam_account_name}</div><br>
+        <div class="muted">MT5 Account : ${x.pamm_mt5_login || 'Pending'}</div>
+      </div>
+      <div class="kpi"><span>Investment</span>${money(x.amount)}</div>
+      <div class="kpi"><span>Profit Share</span>${pct(x.profit_share)}</div>
+      <div class="kpi"><span>Allocation</span>${pct(x.allocation_percentage)}</div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-act="deposit">💳 Add Funds</button>
+      <button class="btn" data-act="withdraw">🏧 Withdraw</button>
+      <button class="btn danger right" data-act="leave">Leave</button>
+    </div>`;
+  c.querySelector('[data-act="deposit"]').onclick  = ()=>showToast('Add funds functionality coming soon', {type:'info'});
+  c.querySelector('[data-act="withdraw"]').onclick = ()=>showToast('Withdraw functionality coming soon', {type:'info'});
+  // investor actions
+  c.querySelector('[data-act="deposit"]').onclick  = ()=> openDepositModal({ role: 'investor', pamm_id: x.pam_account || x.id, mt5: x.pamm_mt5_login || x.mt5_login });
+  c.querySelector('[data-act="withdraw"]').onclick = ()=> openWithdrawModal({ role: 'investor', investment_id: x.id, pamm_id: x.pam_account || x.id, mt5: x.pamm_mt5_login || x.mt5_login });
+  c.querySelector('[data-act="leave"]').onclick    = async ()=>{
+    try{
+      const name = x.pam_account_name || x.pam_account || 'this PAMM';
+      const confirmed = await showConfirm(`Are you sure you want to leave your investment in ${name}?`, 'Confirm leave');
+      if(!confirmed) return;
+      const res = await post(API.leave,{pamm_id:x.pam_account});
+      if(res && res.success === false){
+        if(res.status === 401) return showToast('Please login to perform this action.', {type:'error'});
+        if(res.status === 403) return showToast('You do not have permission to perform this action.', {type:'error'});
+        return showToast(res.error || res.message || 'Failed to leave', {type:'error'});
+      }
+      // show a small success toast and refresh investments
+      showToast('You have left the investment', {type:'success', timeout:2600});
+      await loadInvestments();
+  }catch(e){ console.error('Leave error', e); showToast('Failed to leave investment', {type:'error'}); }
+  };
+  return c;
+}
+
+/* ---------- RENDER: AVAILABLE PAMM LIST ---------- */
+async function loadAvailableList(q=''){
+  const wrap = $('#availableList'); wrap.innerHTML = '';
+  try{
+  // Add timestamp to prevent cached responses from intermediaries
+  const timestamp = Date.now();
+  const r = await fetch(`${API.available}?_t=${timestamp}`, {headers: getHeaders()});
+    if (!r.ok) {
+      if (r.status === 401) {
+        wrap.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🔐</div>
+            <div class="empty-title">Authentication Required</div>
+            <div class="empty-desc">Please log in to browse available PAMM accounts and start investing.</div>
+            <div class="empty-actions">
+              <button class="empty-btn" onclick="location.href='/login'">Login</button>
+              <button class="empty-btn secondary" onclick="location.reload()">Refresh</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+      throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+    }
+    const data = await r.json();
+    if (data.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🎯</div>
+          <div class="empty-title">No Available PAMM Accounts</div>
+          <div class="empty-desc">There are currently no PAMM accounts accepting new investments. Check back later or create your own PAMM account to start managing funds.</div>
+          <div class="empty-actions">
+            <button class="empty-btn" onclick="switchToManager()">Create PAMM Account</button>
+            <button class="empty-btn secondary" onclick="location.reload()">Refresh</button>
+          </div>
+          <div class="empty-features">
+            <div class="empty-feature">
+              <div class="empty-feature-icon">🔄</div>
+              <div class="empty-feature-title">Check Back Soon</div>
+              <div class="empty-feature-desc">New PAMM accounts are added regularly</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">👨‍💼</div>
+              <div class="empty-feature-title">Become a Manager</div>
+              <div class="empty-feature-desc">Create your own PAMM and start earning</div>
+            </div>
+            <div class="empty-feature">
+              <div class="empty-feature-icon">📊</div>
+              <div class="empty-feature-title">Performance Tracking</div>
+              <div class="empty-feature-desc">Monitor all PAMM performance metrics</div>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+    data.filter(x=>(`${x.name} ${x.id}`).toLowerCase().includes(q.toLowerCase()))
+        .forEach(x=>wrap.appendChild(availableCard(x)));
+  }catch(e){
+    console.error('Error loading available PAMMs:', e);
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">Unable to Load Available PAMMs</div>
+        <div class="empty-desc">We're having trouble loading available PAMM accounts. Please check your connection and try again.</div>
+        <div class="empty-actions">
+          <button class="empty-btn" onclick="loadAvailableList()">Try Again</button>
+          <button class="empty-btn secondary" onclick="switchToManager()">Manage PAMMs</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+function availableCard(x){
+  const c = el('div','card');
+  // Tag card with PAMM id so UI can remove it immediately after invest
+  c.dataset.pammId = x.id;
+  c.innerHTML = `
+    <div class="row">
+      <div>
+        <div style="font-weight:700">Manager: ${x.name}</div><br>
+        <div class="muted">MT5 Account: ${x.mt5_login || 'Pending'}</div>
+      </div>
+      <div class="kpi"><span>Profit Sharing</span>${pct(x.profit_share)}</div>
+      <div class="kpi"><span>Pool Balance</span>${money(x.pool_balance)}</div>
+      <div class="kpi"><span>Leverage</span>${x.leverage}x</div>
+      <div class="right muted">${x.enabled ? '• Open':'• Closed'}</div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-act="invest">Invest</button>
+      <button class="btn secondary" data-act="details">View</button>
+    </div>`;
+  c.querySelector('[data-act="invest"]').onclick = ()=>{
+    // pre-fill modal with MT5 account ID for display, but store internal PAMM ID for API call
+    const idField = $('#investPammId'); 
+    if(idField) {
+      idField.value = x.mt5_login || 'Pending'; // Show MT5 account ID to user
+      idField.dataset.pammId = x.id; // Store internal PAMM ID for API call
+    }
+    openModal('#investModal');
+  };
+  c.querySelector('[data-act="details"]').onclick = ()=>showToast(`PAMM: ${x.name} — MT5: ${x.mt5_login || 'Pending'}`, {type:'info', timeout:4200});
+  return c;
+}
+
+/* Create PAMM */
+const _btnCreate = $('#btnCreate'); if(_btnCreate) _btnCreate.onclick = async ()=>{
+  const payload = {
+    name: $('#mgrName').value.trim(),
+    profit_share: +$('#mgrProfitShare').value,
+    leverage: +$('#mgrLeverage').value,
+    master_password: $('#mgrMasterPassword').value.trim(),
+    investor_password: $('#mgrInvestPassword').value.trim(),
+    strategy: '', // Optional field
+    min_investment: 0 // Optional field
+  };
+  
+  // Validate required fields
+  if(!payload.name) return showToast('Enter a name', {type:'error'});
+  if(!payload.profit_share || payload.profit_share < 0 || payload.profit_share > 100) return showToast('Enter valid profit share (0-100%)', {type:'error'});
+  if(!payload.leverage) return showToast('Select leverage', {type:'error'});
+  if(!payload.master_password || payload.master_password.length < 8) return showToast('Master password must be at least 8 characters', {type:'error'});
+  if(!payload.investor_password || payload.investor_password.length < 8) return showToast('Investor password must be at least 8 characters', {type:'error'});
+  
+  try{
+    const response = await post(API.createPamm, payload);
+    if (response && response.success === false) {
+  if (response.status === 401) return showToast('Please login to create PAMM accounts.', {type:'error'});
+  if (response.status === 403) return showToast('You do not have permission to create PAMM accounts.', {type:'error'});
+  return showToast(response.error || response.message || 'Failed to create PAMM account', {type:'error'});
+    } else {
+      // success path
+  showToast('PAMM account created successfully!', {type:'success'});
+      closeModal('#createModal'); 
+      // Clear form
+      $('#mgrName').value = '';
+      $('#mgrProfitShare').value = '';
+      $('#mgrLeverage').value = '';
+      $('#mgrMasterPassword').value = '';
+      $('#mgrInvestPassword').value = '';
+      await loadManagerList();
+    }
+  }catch(e){
+  console.error('PAMM creation error:', e);
+  showToast('Failed to create PAMM account. Please try again.', {type:'error'});
+  }
+};
+
+/* Invest */
+const _btnInvest = $('#btnInvest'); if(_btnInvest) _btnInvest.onclick = async ()=>{
+  const investorEl = $('#investorName');
+  const idEl = $('#investPammId');
+  const investorName = investorEl ? investorEl.value.trim() : '';
+  const pammId = idEl ? parseInt(idEl.dataset.pammId || idEl.value.trim()) : 0;
+
+  if(!investorName){ showToast('Enter investor name', {type:'error', timeout:2600}); return; }
+  if(!pammId){ showToast('Fill MT5 Account ID', {type:'error', timeout:2600}); return; }
+
+  const payload = {
+    pamm_id: pammId,
+    investor_name: investorName
+  };
+
+  try{
+    // Use in-page confirm modal for a better UX
+    const confirmed = await showConfirm(`Confirm investment into PAMM account ${pammId} as ${investorName}?`, 'Confirm investment');
+    if(!confirmed) return;
+
+    const response = await post(API.invest, payload);
+    if (response && response.success === false) {
+      if (response.status === 401) return showToast('Please login to invest in PAMM accounts.', {type:'error'});
+      if (response.status === 403) return showToast('You do not have permission to invest.', {type:'error'});
+      return showToast(response.error || response.message || 'Failed to invest', {type:'error'});
+    }
+    if (response && response.id) {
+      // Friendly toast + animated transition to investments
+      closeModal('#investModal'); 
+      // Clear form
+      if(idEl) { idEl.value = ''; delete idEl.dataset.pammId; }
+      if(investorEl) investorEl.value = '';
+      // Fade out the available PAMM card (graceful removal)
+      try{
+        const card = document.querySelector(`#availableList .card[data-pamm-id="${pammId}"]`);
+        if(card && card.parentElement){
+          // animate
+          card.style.transition = 'opacity .35s ease, transform .35s ease';
+          card.style.opacity = '1';
+          card.style.transform = 'translateY(0)';
+          requestAnimationFrame(()=>{
+            card.style.opacity = '0';
+            card.style.transform = 'translateY(-8px)';
+          });
+          setTimeout(()=>{ try{ if(card.parentElement) card.parentElement.removeChild(card); }catch(e){} }, 380);
+        }
+      }catch(err){ console.error('Failed to fade/remove invested card from DOM', err); }
+
+      // Optimistically add the new investment to the top of the investments list
+      try{
+        const investWrap = document.getElementById('investmentList');
+        if(investWrap){
+          const optimisticCard = investmentCard(response);
+          // small intro animation
+          optimisticCard.style.opacity = '0';
+          optimisticCard.style.transform = 'translateY(8px)';
+          // prepend
+          investWrap.insertBefore(optimisticCard, investWrap.firstChild);
+          requestAnimationFrame(()=>{
+            optimisticCard.style.transition = 'opacity .35s ease, transform .35s ease';
+            optimisticCard.style.opacity = '1';
+            optimisticCard.style.transform = 'translateY(0)';
+          });
+        }
+      }catch(err){ console.error('Failed to add optimistic investment card', err); }
+
+      // Refresh available list so invested PAMM is hidden from available view (server source of truth)
+      try{ await loadAvailableList(); }catch(err){ console.error('Failed to refresh available list', err); }
+      // Show toast then animate switch (investments list will be loaded by animateSwitchToInvestments() too)
+      showToast('Investment successful — showing your investments', {type:'success', timeout:3200});
+      await animateSwitchToInvestments();
+    } else if (response && response.success === false) {
+      showToast(response.error || 'Failed to invest', {type:'error'});
+    } else {
+      showToast('Unexpected response from server', {type:'error'});
+    }
+  }catch(e){
+    console.error('Investment error:', e);
+  showToast('Failed to invest. Please check the MT5 Account ID, investor name and amount.', {type:'error'});
+  }
+};
+
+/* ---------- API WRAPPER ---------- */
+async function post(url, body){
+  try{
+    const r = await fetch(url,{
+      method:'POST',
+      headers: getHeaders(),
+      body:JSON.stringify(body)
+    });
+    // try to read text then parse JSON if possible
+    const text = await r.text().catch(()=>null);
+    let json = null;
+    try{ json = text ? JSON.parse(text) : null; }catch(err){ json = null; }
+    if(!r.ok){
+      // return consistent error shape instead of throwing so callers can handle
+      return {
+        success: false,
+        status: r.status,
+        error: (json && (json.error || json.message)) || text || r.statusText
+      };
+    }
+    // success - return parsed json when present, otherwise a simple success object
+    return json || { success: true, ok: true };
+  }catch(e){
+    // network or unexpected error - rethrow so existing catch blocks still work
+    throw e;
+  }
+}
+
+/* ---------- Deposit / Withdraw modal wiring ---------- */
+function openDepositModal(ctx){
+  // ctx: { role: 'manager'|'investor', pamm_id, mt5 }
+  const modal = document.getElementById('quickDeposit');
+  if(!modal) return;
+  modal.style.display = 'flex';
+  modal.dataset.role = ctx.role;
+  modal.dataset.pammId = ctx.pamm_id;
+  modal.dataset.mt5 = ctx.mt5 || '';
+  // pre-fill amount if needed
+  const cpInput = document.getElementById('q-cpInput'); if(cpInput) cpInput.value = '';
+}
+
+function openWithdrawModal(ctx){
+  const modal = document.getElementById('quickWithdraw');
+  if(!modal) return;
+  modal.style.display = 'flex';
+  modal.dataset.role = ctx.role;
+  modal.dataset.pammId = ctx.pamm_id;
+  modal.dataset.investmentId = ctx.investment_id || '';
+  modal.dataset.mt5 = ctx.mt5 || '';
+  // set available balance and account select if manager
+  const select = document.getElementById('withdraw-account-select');
+  if(select){
+    select.innerHTML = `<option value="${ctx.pamm_id}">${ctx.mt5 || ctx.pamm_id}</option>`;
+  }
+  const bal = document.getElementById('with_bal'); if(bal) bal.textContent = '0.00';
+}
+
+// Wire quick deposit confirm button (CheesePay) - simple POST
+// Deposit button handlers: support CheesePay (JSON), Manual (FormData with proof file) and USDT
+document.querySelectorAll('.deposit-box-btn').forEach(btn=>{
+  btn.addEventListener('click', async (ev)=>{
+    const modal = document.getElementById('quickDeposit');
+    if(!modal) return showToast('Deposit modal not open', {type:'error'});
+    const role = modal.dataset.role || 'investor';
+    const pamm_id = modal.dataset.pammId;
+    const mt5 = modal.dataset.mt5;
+    // determine active tab
+    const activeTab = document.querySelector('#quickDeposit .modal-tab.active')?.dataset.tab || 'q-cheesepay';
+    const submitBtn = ev.currentTarget;
+    const origText = submitBtn.textContent;
+    try{
+      submitBtn.disabled = true; submitBtn.textContent = 'Processing...';
+      if(activeTab === 'q-cheesepay'){
+        const amount = parseFloat((document.getElementById('q-cpInput')||{value:''}).value) || 0;
+        if(!pamm_id || amount<=0) return showToast('Select account and enter a valid amount', {type:'error'});
+        const res = await post(API.depositCheese, { mam_id: pamm_id, amount, method: 'cheesepay', role, mt5 });
+        showToast(res.message || 'CheesePay initiated', {type: res && res.success===false ? 'error' : 'success'});
+        modal.style.display = 'none';
+        // Refresh the manager list to show updated balance
+        await loadManagerList();
+      } else if(activeTab === 'q-manual'){
+        const amount = parseFloat((document.getElementById('q-manualInput')||{value:''}).value) || 0;
+        const fileEl = document.getElementById('q-manual-file');
+        if(!pamm_id || amount<=0 || !fileEl || !fileEl.files || fileEl.files.length===0) return showToast('Select account, enter amount and attach proof', {type:'error'});
+        const fd = new FormData();
+        fd.append('mam_id', pamm_id);
+        fd.append('amount', amount);
+        fd.append('proof', fileEl.files[0]);
+        fd.append('role', role);
+        // Use fetch with FormData (no JSON headers)
+        const headers = {};
+        // add Authorization and CSRF token manually
+        const jwt = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('jwt_token') || localStorage.getItem('access_token');
+        if(jwt) headers['Authorization'] = `Bearer ${jwt}`;
+        const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || document.querySelector('meta[name=csrf-token]')?.content || getCookie('csrftoken');
+        if(csrf) headers['X-CSRFToken'] = csrf;
+        const r = await fetch(API.depositManual, { method: 'POST', headers, body: fd });
+        const text = await r.text().catch(()=>null);
+        let res = null; try{ res = text ? JSON.parse(text) : null; }catch(err){ res = null; }
+        if(!r.ok){
+          const errMsg = (res && (res.error||res.message)) || text || r.statusText;
+          showToast('Manual deposit failed: ' + errMsg, {type:'error'});
+        } else {
+          showToast((res && (res.message||res.success_message)) || 'Manual deposit submitted', {type:'success'});
+        }
+        modal.style.display = 'none';
+        // Refresh the manager list to show updated balance
+        await loadManagerList();
+      } else if(activeTab === 'q-usdt'){
+        const amount = parseFloat((document.getElementById('q-usdt-input')||{value:''}).value) || 0;
+        const fileEl = document.getElementById('q-usdt-file');
+        if(!pamm_id || amount<=0 || !fileEl || !fileEl.files || fileEl.files.length===0) return showToast('Select account, enter a valid amount and attach proof', {type:'error'});
+        const fd = new FormData();
+        fd.append('mam_id', pamm_id);
+        fd.append('amount', amount);
+        fd.append('proof', fileEl.files[0]);
+        fd.append('role', role);
+        const jwt = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('jwt_token') || localStorage.getItem('access_token');
+        const headers = {};
+        if(jwt) headers['Authorization'] = `Bearer ${jwt}`;
+        const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || document.querySelector('meta[name=csrf-token]')?.content || getCookie('csrftoken');
+        if(csrf) headers['X-CSRFToken'] = csrf;
+        const r = await fetch(API.depositUSDT, { method: 'POST', headers, body: fd });
+        const text = await r.text().catch(()=>null);
+        let res = null; try{ res = text ? JSON.parse(text) : null; }catch(err){ res = null; }
+        if(!r.ok){
+          const errMsg = (res && (res.error||res.message)) || text || r.statusText;
+          showToast('USDT deposit failed: ' + errMsg, {type:'error'});
+        } else {
+          showToast((res && (res.message||res.success_message)) || 'USDT deposit submitted', {type:'success'});
+        }
+        modal.style.display = 'none';
+      }
+    }catch(e){
+      console.error('Deposit error', e); showToast('Deposit failed: '+(e.message||e), {type:'error'});
+    }finally{
+      submitBtn.disabled = false; submitBtn.textContent = origText;
+    }
+  });
+});
+
+// Modal inner tab switching (CheesePay / Manual / USDT)
+document.querySelectorAll('#quickDeposit .modal-tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('#quickDeposit .modal-tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('#quickDeposit .tab-content').forEach(c=>c.classList.add('hidden'));
+    const sel = tab.dataset.tab; const elc = document.getElementById(sel);
+    if(elc) elc.classList.remove('hidden');
+  });
+});
+
+// Manual and USDT submit buttons handle their own deposit logic directly
+const manualSubmitBtn = document.getElementById('q-manual-submit'); if(manualSubmitBtn) manualSubmitBtn.addEventListener('click', async (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  const btn = e.currentTarget; const orig = btn.textContent;
+  const modal = document.getElementById('quickDeposit');
+  if(!modal) return showToast('Deposit modal not open', {type:'error'});
+  const role = modal.dataset.role || 'investor';
+  const pamm_id = modal.dataset.pammId;
+  const mt5_account = modal.dataset.mt5; // Use MT5 account ID instead of PAMM ID
+  const amount = parseFloat((document.getElementById('q-manualInput')||{value:''}).value) || 0;
+  const fileEl = document.getElementById('q-manual-file');
+  if(!mt5_account || amount<=0 || !fileEl || !fileEl.files || fileEl.files.length===0) return showToast('Select account, enter amount and attach proof', {type:'error'});
+  const fd = new FormData();
+  fd.append('mam_id', mt5_account); // Send MT5 account ID as mam_id
+  fd.append('amount', amount);
+  fd.append('proof', fileEl.files[0]);
+  fd.append('role', role);
+  const headers = {};
+  const jwt = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('jwt_token') || localStorage.getItem('access_token');
+  if(jwt) headers['Authorization'] = `Bearer ${jwt}`;
+  const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || document.querySelector('meta[name=csrf-token]')?.content || getCookie('csrftoken');
+  if(csrf) headers['X-CSRFToken'] = csrf;
+  try{
+    btn.disabled = true; btn.textContent = 'Processing...';
+    const r = await fetch(API.depositManual, { method: 'POST', headers, body: fd });
+    const text = await r.text().catch(()=>null);
+    let res = null; try{ res = text ? JSON.parse(text) : null; }catch(err){ res = null; }
+    if(!r.ok){
+      const errMsg = (res && (res.error||res.message)) || text || r.statusText;
+      showToast('Manual deposit failed: ' + errMsg, {type:'error'});
+    } else {
+      showToast((res && (res.message||res.success_message)) || 'Manual deposit submitted', {type:'success'});
+    }
+    modal.style.display = 'none';
+    // Refresh the manager list to show updated balance
+    await loadManagerList();
+  }catch(e){ console.error('Manual deposit error', e); showToast('Manual deposit failed: '+(e.message||e), {type:'error'}); }
+  finally{ btn.disabled = false; btn.textContent = orig; }
+});
+const usdtSubmitBtn = document.getElementById('q-usdt-submit'); if(usdtSubmitBtn) usdtSubmitBtn.addEventListener('click', async (e)=>{
+  e.preventDefault(); e.stopPropagation();
+  const btn = e.currentTarget; const orig = btn.textContent;
+  const modal = document.getElementById('quickDeposit');
+  if(!modal) return showToast('Deposit modal not open', {type:'error'});
+  const role = modal.dataset.role || 'investor';
+  const pamm_id = modal.dataset.pammId;
+  const mt5_account = modal.dataset.mt5; // Use MT5 account ID instead of PAMM ID
+  const amount = parseFloat((document.getElementById('q-usdt-input')||{value:''}).value) || 0;
+  const fileEl = document.getElementById('q-usdt-file');
+  if(!mt5_account || amount<=0 || !fileEl || !fileEl.files || fileEl.files.length===0) return showToast('Select account, enter a valid amount and attach proof', {type:'error'});
+  const fd = new FormData();
+  fd.append('mam_id', mt5_account); // Send MT5 account ID as mam_id
+  fd.append('amount', amount);
+  fd.append('proof', fileEl.files[0]);
+  fd.append('role', role);
+  const jwt = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('jwt_token') || localStorage.getItem('access_token');
+  const headers = {};
+  if(jwt) headers['Authorization'] = `Bearer ${jwt}`;
+  const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || document.querySelector('meta[name=csrf-token]')?.content || getCookie('csrftoken');
+  if(csrf) headers['X-CSRFToken'] = csrf;
+  try{
+    btn.disabled = true; btn.textContent = 'Processing...';
+    const r = await fetch(API.depositUSDT, { method: 'POST', headers, body: fd });
+    const text = await r.text().catch(()=>null);
+    let res = null; try{ res = text ? JSON.parse(text) : null; }catch(err){ res = null; }
+    if(!r.ok){
+      const errMsg = (res && (res.error||res.message)) || text || r.statusText;
+      showToast('USDT deposit failed: ' + errMsg, {type:'error'});
+    } else {
+      showToast((res && (res.message||res.success_message)) || 'USDT deposit submitted', {type:'success'});
+    }
+    modal.style.display = 'none';
+    await loadManagerList();
+  }catch(e){ console.error('USDT deposit error', e); showToast('USDT deposit failed: '+(e.message||e), {type:'error'}); }
+  finally{ btn.disabled = false; btn.textContent = orig; }
+});
+
+// Wire quick withdraw request (manager/investor) - simple POST
+document.querySelectorAll('.with-tab-buttons .with-tab-btn, .with-tab-content').forEach(()=>{});
+const withdrawConfirmHandler = async ()=>{
+  const modal = document.getElementById('quickWithdraw');
+  if(!modal) return showToast('Withdraw modal not open', {type:'error'});
+  const role = modal.dataset.role || 'investor';
+  const pamm_id = modal.dataset.pammId;
+  const mt5_account = modal.dataset.mt5; // Use MT5 account ID instead of PAMM ID
+  const investment_id = modal.dataset.investmentId || null;
+  const amount = parseFloat((document.getElementById('with_bal')||{textContent:'0'}).textContent) || 0;
+  if(!mt5_account || amount<=0) return showToast('Select account and ensure balance > 0', {type:'error'});
+  try{
+    const res = await post(API.withdraw, { mam_id: mt5_account, investment_id, amount, role }); // Send MT5 account ID as mam_id
+    showToast(res.message || 'Withdraw request submitted', {type:'success'});
+    modal.style.display = 'none';
+    // Refresh the manager list to show updated balance
+    await loadManagerList();
+  }catch(e){ console.error('Withdraw error', e); showToast('Withdraw failed', {type:'error'}); }
+};
+
+
+/* ---------- INIT ---------- */
+// Prevent autofill from triggering searches: only run manager search when user types
+const _mgrSearchEl = $('#mgrSearch');
+// simple debounce helper
+function debounce(fn, wait){ let t; return function(...args){ clearTimeout(t); t = setTimeout(()=>fn.apply(this,args), wait); }; }
+
+if(_mgrSearchEl){
+  let mgrUserTyped = false;
+  // mark as user-initiated when typing or pasting
+  _mgrSearchEl.addEventListener('keydown', ()=> mgrUserTyped = true);
+  _mgrSearchEl.addEventListener('paste', ()=> mgrUserTyped = true);
+
+  // Only trigger search when user explicitly presses Enter (prevents autofill from firing API)
+  _mgrSearchEl.addEventListener('keydown', debounce(function(e){
+    try{
+      if(e.key === 'Enter'){
+        const q = e.target.value || '';
+        loadManagerList(q);
+      }
+    }catch(err){ console.error('mgrSearch enter handler error', err); }
+  }, 150));
+}
+// search in available and investments, but only call APIs for lists that are currently visible
+$('#invSearch').addEventListener('input', e=>{
+  const q = e.target.value;
+  try{
+    const availablePanel = document.getElementById('available');
+    const investmentListEl = document.getElementById('investmentList');
+    // If Available tab is visible, search available list
+    if(availablePanel && !availablePanel.classList.contains('hidden')){
+      loadAvailableList(q);
+    }
+    // If investments list is currently shown (toggled), search investments
+    if(investmentListEl && investmentListEl.style.display !== 'none' && investmentListEl.style.display !== ''){
+      loadInvestments(q);
+    }
+  }catch(err){ console.error('Search handler error', err); }
+});
+// "My Investments" button now toggles between Available PAMMs and My Investments
+const investToggle = $('#investments'); if(investToggle){
+  const availableListEl = $('#availableList');
+  const investListEl = $('#investmentList');
+  // initial state: show available, hide investments
+  if(availableListEl) availableListEl.style.display = 'grid';
+  if(investListEl) investListEl.style.display = 'none';
+  investToggle.textContent = 'My Investments';
+
+  let showing = 'available';
+  investToggle.addEventListener('click', ()=>{
+    if(!availableListEl || !investListEl) return;
+    if(showing === 'available'){
+      // switch to investments
+      availableListEl.style.display = 'none';
+      investListEl.style.display = 'grid';
+      investToggle.textContent = 'Show Available PAMMs';
+      showing = 'investments';
+      loadInvestments();
+    }else{
+      // switch to available
+      investListEl.style.display = 'none';
+      availableListEl.style.display = 'grid';
+      investToggle.textContent = 'My Investments';
+      showing = 'available';
+    }
+  });
+}
+
+// Attempt to auto-fill current user name into manager and investor name fields and disable input
+async function tryAutofillUserName(){
+  try{
+    const headers = getHeaders();
+    const r = await fetch(API.userInfo, { headers });
+    if(!r.ok) return; // not authenticated or endpoint unavailable
+    const data = await r.json().catch(()=>null);
+    if(!data) return;
+    // prefer full_name, then name, then username, then email
+    const name = data.get_full_name || data.full_name || data.name || data.username || data.email || data.user_name || data.display_name;
+    if(!name) return;
+    const mgrEl = document.getElementById('mgrName');
+    const invEl = document.getElementById('investorName');
+    if(mgrEl){ mgrEl.value = name; mgrEl.setAttribute('readonly','true'); mgrEl.style.cursor='not-allowed'; }
+    if(invEl){ invEl.value = name; invEl.setAttribute('readonly','true'); invEl.style.cursor='not-allowed'; }
+  }catch(e){ console.error('Autofill user name failed', e); }
+}
+
+// Run autofill shortly after page load
+tryAutofillUserName();
+// Initial load: only load the manager list (manager tab is active by default)
+loadManagerList();
+</script>
+</body>
+</html>

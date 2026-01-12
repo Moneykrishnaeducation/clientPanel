@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Verification Code</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin:0; padding:0; background:#000; color:#FFD700 }
+        .container{ max-width:600px; margin:20px auto; background:#1a1a1a; border-radius:10px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.6); border:1px solid rgba(212,175,55,0.08)}
+        .header{ background:linear-gradient(145deg,#FFD700,#B8860B); color:#000; padding:22px; text-align:center }
+        .header h1{ margin:0; font-size:20px }
+        .content{ padding:20px 28px; color:#f5f5f5 }
+        .otp{ font-size:28px; font-weight:700; color:#FFD700; text-align:center; padding:18px; border-radius:8px; background:rgba(0,0,0,0.6); margin:18px 0; border:1px solid rgba(255,215,0,0.2) }
+        .meta{ font-size:13px; color:#cfc9b0; margin-top:8px }
+        .footer{ background:#0d0d0d; padding:12px 18px; text-align:center; color:#bfb38a; font-size:12px; border-top:1px solid rgba(212,175,55,0.06) }
+        a{ color:#FFD700 }
+        @media (max-width:600px){ .container{ width:95%; margin:10px auto } .otp{ font-size:20px } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>VTIndex — Login Verification</h1>
+        </div>
+        <div class="content">
+            <h2 style="color:#FFD700">Hello {{ first_name }},</h2>
+            <p>We noticed a login attempt to your account from a new IP address. To complete sign-in, please enter the verification code below in the app.</p>
+            <div class="otp">{{ otp }}</div>
+            <p class="meta">IP: {{ ip_address }}{% if login_time %} &nbsp; • &nbsp; Time: {{ login_time }}{% endif %}</p>
+            <p>This code expires in <strong>60 seconds</strong>. If you did not attempt to sign in, please secure your account immediately or contact <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; VTIndex. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
