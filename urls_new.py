@@ -82,6 +82,11 @@ from .views.views4 import (
     ToggleInvestorCopyView, IBStatusView, IBCommissionBalanceView, 
     IBCommissionTransactionsView, IBTransactionsView, IBReferralLinkView
 )
+# Reuse the admin ticket detail view for client-side ticket detail requests
+try:
+    from adminPanel.views.ticket_views import TicketDetailView
+except Exception:
+    TicketDetailView = None
 # Import StatsOverviewView with alias to avoid conflicts
 from .views.views4 import UserProfileChangeRequestsView
 from .views.views4 import StatsOverviewView as IBStatsOverviewView, BasicUserInfoView
@@ -181,6 +186,8 @@ api_patterns = [
     path('tickets/<int:ticket_id>/messages/', TicketMessagesView.as_view(), name='api-ticket-messages'),
     path('tickets/<int:ticket_id>/send-message/', SendMessageView.as_view(), name='api-ticket-send-message'),
     path('tickets/<int:ticket_id>/change-status/', ChangeTicketStatusView.as_view(), name='api-ticket-change-status'),
+    # Client-facing ticket detail (GET) - use client view that enforces owner permissions
+    path('tickets/<int:ticket_id>/', TicketDetailClientView.as_view(), name='api-ticket-detail'),
 
     # Notification endpoints
     path('notifications/', get_notifications, name='api-client-notifications'),

@@ -31,6 +31,7 @@ from adminPanel.views.views import get_client_ip, generate_password
 # Now define TicketsView after all imports
 class TicketsView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         try:
@@ -53,15 +54,33 @@ class TicketsView(APIView):
     def post(self, request):
         try:
             data = request.data
-            files = request.FILES.getlist("documents")
+            # Collect uploaded files from common field names; fall back to any uploaded files
+            if "documents" in request.FILES:
+                files = request.FILES.getlist("documents")
+            elif "documents[]" in request.FILES:
+                files = request.FILES.getlist("documents[]")
+            else:
+                # fallback: include all uploaded files
+                files = list(request.FILES.values())
+            # Log for debugging
+            try:
+                print(f"CreateTicketView: received {len(files)} files")
+            except Exception:
+                pass
             ticket_data = {
                 "subject": data.get("subject"),
                 "description": data.get("description"),
             }
             serializer = TicketSerializer(data=ticket_data)
             if serializer.is_valid():
-                serializer.save(created_by=request.user)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                with transaction.atomic():
+                    ticket = serializer.save(created_by=request.user)
+                    # Save uploaded files as Message entries attached to the ticket
+                    for f in files:
+                        Message.objects.create(ticket=ticket, sender=request.user, file=f)
+                # Return full ticket data including messages (with file paths)
+                ticket_resp = TicketWithMessagesSerializer(ticket, context={'request': request}).data
+                return Response({"message": "Ticket created successfully!", "ticket": ticket_resp}, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
@@ -332,6 +351,7 @@ class ChangeDemoLeverageView(APIView):
 
 class CreateTicketView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         try:
@@ -431,6 +451,7 @@ class SendMessageView(APIView):
     Send a new message for a specific ticket.
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, ticket_id):
         try:
@@ -451,6 +472,29 @@ class SendMessageView(APIView):
                 {"error": "Failed to send the message.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class TicketDetailClientView(APIView):
+    """
+    Client-facing ticket detail view (includes messages/attachments).
+    Returns 403 if the authenticated user does not own the ticket (unless staff).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, ticket_id):
+        try:
+            # Staff can view any ticket; regular users can view only their own
+            if hasattr(request.user, 'is_staff') and (request.user.is_staff or getattr(request.user, 'is_superuser', False)):
+                ticket = Ticket.objects.get(id=ticket_id)
+            else:
+                ticket = Ticket.objects.get(id=ticket_id, created_by=request.user)
+
+            serializer = TicketWithMessagesSerializer(ticket, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Ticket.DoesNotExist:
+            return Response({"error": "Ticket not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ChangeTicketStatusView(APIView):
     """
