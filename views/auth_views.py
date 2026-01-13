@@ -37,8 +37,34 @@ from django.http import HttpResponseRedirect
 import os
 from datetime import datetime
 from brokerBackend.cookie_manager import CookieManager
+import hashlib
 
 logger = logging.getLogger(__name__)
+
+def hash_otp(otp):
+    """Hash OTP with salt for secure storage"""
+    salt = secrets.token_hex(16)  # Random 16-byte salt
+    otp_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        otp.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Iterations
+    )
+    return f"{salt}${otp_hash.hex()}"
+
+def verify_otp(stored_hash, provided_otp):
+    """Verify provided OTP against stored hash"""
+    try:
+        salt, otp_hash = stored_hash.split('$')
+        provided_hash = hashlib.pbkdf2_hmac(
+            'sha256',
+            provided_otp.encode('utf-8'),
+            salt.encode('utf-8'),
+            100000
+        ).hex()
+        return provided_hash == otp_hash
+    except Exception:
+        return False
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -356,6 +382,21 @@ def client_login_view(request):
     password = request.data.get('password')
     
     if not email or not password:
+        # Log failed login attempt
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity="Login attempt - missing email or password",
+                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=400,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to create failed login ActivityLog")
         return Response({
             'error': 'Both email and password are required',
         }, status=status.HTTP_400_BAD_REQUEST)
@@ -387,15 +428,60 @@ def client_login_view(request):
         .filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
 
     if not user:
+        # Log failed login attempt
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity=f"Login attempt - user not found: {email}",
+                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=401,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to create user-not-found ActivityLog")
         return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
 
     # Verify password
     if not user.check_password(password):
+        # Log failed login attempt
+        try:
+            ActivityLog.objects.create(
+                user=user,
+                activity="Login attempt - invalid password",
+                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=401,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to create invalid-password ActivityLog")
         return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
 
     # Check if user has access to client panel (allow Client, Admin, and Manager roles)
     allowed_roles = ['admin', 'manager', 'client', 'Admin', 'Manager', 'Client', 'None']
     if user.manager_admin_status not in allowed_roles:
+        # Log access denied
+        try:
+            ActivityLog.objects.create(
+                user=user,
+                activity="Login attempt - insufficient permissions",
+                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=401,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to create access-denied ActivityLog")
         return Response({'error': 'Access denied: insufficient permissions for client portal'}, status=status.HTTP_401_UNAUTHORIZED)
 
     # `current_ip` was determined earlier for rate-limiting and is reused here
@@ -412,7 +498,9 @@ def client_login_view(request):
         try:
             # Generate login-specific OTP and attach to user (separate from password-reset OTP)
             otp = f"{random.randint(100000, 999999)}"
-            user.login_otp = otp
+            # Hash OTP before storing
+            hashed_otp = hash_otp(otp)
+            user.login_otp = hashed_otp
             user.login_otp_created_at = timezone.now()
             user.save(update_fields=["login_otp", "login_otp_created_at"])
 
@@ -443,6 +531,7 @@ def client_login_view(request):
                         endpoint=request.path,
                         activity_type="update",
                         activity_category="client",
+                        status_code=202,
                         user_agent=request.META.get("HTTP_USER_AGENT", ""),
                         timestamp=timezone.now(),
                         related_object_id=user.id,
@@ -480,6 +569,7 @@ def client_login_view(request):
                         endpoint=request.path,
                         activity_type="update",
                         activity_category="client",
+                        status_code=200,
                         user_agent=request.META.get("HTTP_USER_AGENT", ""),
                         timestamp=timezone.now(),
                         related_object_id=user.id,
@@ -1578,6 +1668,20 @@ def resend_login_otp_view(request):
     """Endpoint to resend a login OTP for a pending login verification. Enforces a short cooldown to prevent abuse."""
     email = request.data.get('email')
     if not email:
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity="OTP resend attempt - missing email",
+                ip_address=request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=400,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to log OTP resend missing email")
         return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
@@ -1610,11 +1714,14 @@ def resend_login_otp_view(request):
 
         # Generate new login OTP
         otp = f"{random.randint(100000, 999999)}"
-        user.login_otp = otp
+        # Hash OTP before storing (same as initial login)
+        from adminPanel.views.auth_views import hash_otp
+        hashed_otp = hash_otp(otp)
+        user.login_otp = hashed_otp
         user.login_otp_created_at = timezone.now()
         user.save(update_fields=['login_otp', 'login_otp_created_at'])
 
-        # Send login OTP email using the dedicated login template
+        # Send login OTP email using the dedicated login template (plain text)
         try:
             EmailSender.send_login_otp_email(
                 user.email,
@@ -1635,6 +1742,7 @@ def resend_login_otp_view(request):
                 endpoint=request.path,
                 activity_type="update",
                 activity_category="client",
+                status_code=200,
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
                 timestamp=timezone.now(),
                 related_object_id=user.id,
@@ -1650,6 +1758,20 @@ def resend_login_otp_view(request):
             'otp_expires_in': int(otp_ttl_seconds)
         })
     except CustomUser.DoesNotExist:
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity=f"OTP resend attempt - user not found: {email}",
+                ip_address=request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=404,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to log OTP resend user not found")
         return Response({'error': 'No account found with this email'}, status=status.HTTP_404_NOT_FOUND)
 
 
@@ -1664,6 +1786,20 @@ def login_otp_status_view(request):
     """
     email = request.query_params.get('email')
     if not email:
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity="OTP status check - missing email",
+                ip_address=request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=400,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to log OTP status missing email")
         return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
     try:
         user = CustomUser.objects.get(email=email)
@@ -1681,12 +1817,44 @@ def login_otp_status_view(request):
             if elapsed < otp_ttl_seconds:
                 otp_expires_in = int(otp_ttl_seconds - elapsed)
 
+        # Log successful status check
+        try:
+            ActivityLog.objects.create(
+                user=user,
+                activity="OTP status checked",
+                ip_address=request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=200,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now(),
+                related_object_id=user.id,
+                related_object_type="LoginVerification"
+            )
+        except Exception:
+            logger.exception("Failed to log OTP status check")
+
         return Response({
             'has_pending': has_pending,
             'retry_after': retry_after,
             'otp_expires_in': otp_expires_in
         })
     except CustomUser.DoesNotExist:
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity=f"OTP status check - user not found: {email}",
+                ip_address=request.META.get('REMOTE_ADDR', ''),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=404,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now()
+            )
+        except Exception:
+            logger.exception("Failed to log OTP status user not found")
         return Response({'error': 'No account found with this email'}, status=status.HTTP_404_NOT_FOUND)
 
 @csrf_exempt
@@ -1769,10 +1937,12 @@ def send_reset_otp_view(request):
             return Response({'error': 'Too many OTP send attempts. Try again later.'}, status=429)
         # Generate OTP
         otp = f"{random.randint(100000, 999999)}"
-        user.otp = otp
+        # Hash OTP before storing
+        hashed_otp = hash_otp(otp)
+        user.otp = hashed_otp
         user.otp_created_at = timezone.now()
         user.save()
-        # Send OTP email
+        # Send OTP email (plain text)
         EmailSender.send_otp_email(user.email, otp)
         return Response({'message': 'OTP sent to your email.'})
     except CustomUser.DoesNotExist:
@@ -1786,6 +1956,20 @@ class VerifyOtpView(APIView):
         otp = request.data.get('otp')
 
         if not email or not otp:
+            try:
+                ActivityLog.objects.create(
+                    user=None,
+                    activity="OTP verification attempt - missing email or OTP",
+                    ip_address=request.META.get('REMOTE_ADDR', ''),
+                    endpoint=request.path,
+                    activity_type="create",
+                    activity_category="client",
+                    status_code=400,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now()
+                )
+            except Exception:
+                logger.exception("Failed to log OTP verification missing fields")
             return Response(
                 {'error': 'Email and OTP are required'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1817,16 +2001,37 @@ class VerifyOtpView(APIView):
                     user.login_otp_created_at = None
                     user.save(update_fields=['login_otp', 'login_otp_created_at'])
 
+                    try:
+                        ActivityLog.objects.create(
+                            user=user,
+                            activity="OTP verification attempt - OTP expired",
+                            ip_address=get_client_ip(request),
+                            endpoint=request.path,
+                            activity_type="create",
+                            activity_category="client",
+                            status_code=400,
+                            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                            timestamp=timezone.now(),
+                            related_object_id=user.id,
+                            related_object_type="LoginVerification"
+                        )
+                    except Exception:
+                        logger.exception("Failed to log OTP expired")
+
                     return Response(
                         {'error': 'OTP has expired. Please request a new one.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-                if user.login_otp != otp:
+                # Verify OTP against stored hash
+                if not user.is_login_otp_valid(otp):
                     # Generate and send a new login OTP on invalid attempt
                     try:
                         new_otp = f"{random.randint(100000, 999999)}"
-                        user.login_otp = new_otp
+                        # Hash the new OTP before storing
+                        from adminPanel.views.auth_views import hash_otp
+                        hashed_otp = hash_otp(new_otp)
+                        user.login_otp = hashed_otp
                         user.login_otp_created_at = timezone.now()
                         user.save(update_fields=['login_otp', 'login_otp_created_at'])
                         try:
@@ -1847,6 +2052,7 @@ class VerifyOtpView(APIView):
                                 endpoint=request.path,
                                 activity_type="update",
                                 activity_category="client",
+                                status_code=400,
                                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
                                 timestamp=timezone.now(),
                                 related_object_id=user.id,
@@ -1921,6 +2127,7 @@ class VerifyOtpView(APIView):
                             endpoint=request.path,
                             activity_type="update",
                             activity_category="client",
+                            status_code=200,
                             user_agent=request.META.get("HTTP_USER_AGENT", ""),
                             timestamp=timezone.now(),
                             related_object_id=user.id,
@@ -2011,36 +2218,41 @@ class VerifyOtpView(APIView):
                 )
 
             if user.otp != otp:
-                # Generate and send a new password-reset OTP on invalid attempt
-                try:
-                    new_otp = f"{random.randint(100000, 999999)}"
-                    user.otp = new_otp
-                    user.otp_created_at = timezone.now()
-                    user.save(update_fields=['otp', 'otp_created_at'])
+                # Verify OTP against stored hash for password-reset
+                from adminPanel.views.auth_views import verify_otp as verify_otp_hash
+                if not verify_otp_hash(user.otp, otp):
+                    # Generate and send a new password-reset OTP on invalid attempt
                     try:
-                        EmailSender.send_otp_email(user.email, new_otp)
+                        new_otp = f"{random.randint(100000, 999999)}"
+                        # Hash the new OTP before storing
+                        hashed_otp = hash_otp(new_otp)
+                        user.otp = hashed_otp
+                        user.otp_created_at = timezone.now()
+                        user.save(update_fields=['otp', 'otp_created_at'])
+                        try:
+                            EmailSender.send_otp_email(user.email, new_otp)
+                        except Exception:
+                            logger.exception('Failed to send regenerated password-reset OTP email')
+                        try:
+                            ActivityLog.objects.create(
+                                user=user,
+                                activity="Password-reset OTP regenerated after invalid attempt",
+                                ip_address=get_client_ip(request),
+                                endpoint=request.path,
+                                activity_type="update",
+                                activity_category="client",
+                                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                                timestamp=timezone.now(),
+                                related_object_id=user.id,
+                                related_object_type="PasswordReset"
+                            )
+                        except Exception:
+                            logger.exception('Failed to create ActivityLog for regenerated password-reset OTP')
                     except Exception:
-                        logger.exception('Failed to send regenerated password-reset OTP email')
-                    try:
-                        ActivityLog.objects.create(
-                            user=user,
-                            activity="Password-reset OTP regenerated after invalid attempt",
-                            ip_address=get_client_ip(request),
-                            endpoint=request.path,
-                            activity_type="update",
-                            activity_category="client",
-                            user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                            timestamp=timezone.now(),
-                            related_object_id=user.id,
-                            related_object_type="PasswordReset"
-                        )
-                    except Exception:
-                        logger.exception('Failed to create ActivityLog for regenerated password-reset OTP')
-                except Exception:
-                    logger.exception('Failed to regenerate password-reset OTP on invalid attempt')
+                        logger.exception('Failed to regenerate password-reset OTP on invalid attempt')
 
-                return Response(
-                    {'error': 'Invalid OTP. A new verification code has been sent to your email.'},
+                    return Response(
+                        {'error': 'Invalid OTP. A new verification code has been sent to your email.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
