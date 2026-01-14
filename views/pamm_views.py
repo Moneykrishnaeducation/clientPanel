@@ -21,6 +21,7 @@ try:
 except Exception:
     ActivityLog = None
 from django.utils.timezone import now
+from .auth_views import get_client_ip
 # The original code expected a helper `has_permission` to be importable from
 # adminPanel.permissions. The adminPanel.permissions module exposes
 # permission classes instead. Provide a small compatibility helper here to
@@ -363,7 +364,7 @@ def deposit_to_pamm(request):
                 ActivityLog.objects.create(
                     user=request.user,
                     activity=f"Submitted PAMM deposit request of {amount_dec} to PAMM {pamm.id} (manager acct {manager_account.account_id})",
-                    ip_address=request.META.get('REMOTE_ADDR', ''),
+                    ip_address=get_client_ip(request),
                     endpoint=request.path,
                     activity_type='create',
                     activity_category='client',
