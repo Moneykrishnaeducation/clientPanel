@@ -95,15 +95,16 @@ def save_coefficient(request):
             account = TradingAccount.objects.get(account_id=account_id)
             logger.info(f"Found account: {account.account_id}, type: {account.account_type}, user: {account.user.id}")
             
-            # Verify it's a MAM investment account
-            if account.account_type != 'mam_investment':
+            # Verify it's a MAM account (either manager or investment)
+            if account.account_type not in ['mam', 'mam_investment']:
                 return Response(
-                    {"error": f"Account {account_id} is not a MAM investment account"},
+                    {"error": f"Account {account_id} is not a MAM account"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
                 
             # Check if the user has permission to update this account
-            if account.user != request.user:
+            # Allow if user owns the account OR if user is staff/admin
+            if account.user != request.user and not request.user.is_staff:
                 return Response(
                     {"error": "You do not have permission to update this account"},
                     status=status.HTTP_403_FORBIDDEN
@@ -211,6 +212,11 @@ def debug_account_coefficient(request, account_id):
 
 def trigger_position_update_background(account_id):
     """Helper function to trigger position updates in background after transaction commits"""
+    # DISABLED: Real-time MAM engine handles position copying automatically
+    # Background updates were causing duplicate position creation
+    logger.info(f"📋 Position update skipped for account {account_id} - handled by real-time MAM engine")
+    return
+    
     import threading
     
     def update_positions():

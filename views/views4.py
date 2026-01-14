@@ -120,8 +120,14 @@ class ToggleInvestorCopyView(APIView):
         import logging
         logger = logging.getLogger(__name__)
         try:
-            # Verify account ownership - never trust client-provided IDs
-            investor = get_object_or_404(TradingAccount, account_id=account_id, user=request.user)
+            # Find the investor account by account_id, ensuring the manager owns the master account
+            investor = get_object_or_404(
+                TradingAccount, 
+                account_id=account_id, 
+                account_type="mam_investment",
+                mam_master_account__user=request.user,
+                mam_master_account__account_type="mam"
+            )
             investor.manager_allow_copy = not investor.manager_allow_copy
 
             # Check for mam_master_account before proceeding
@@ -168,7 +174,7 @@ class ToggleInvestorCopyView(APIView):
                     return Response(
                         {
                             "account_id": investor.account_id,
-                            "investor_allow_copy": investor.manager_allow_copy,
+                            "manage_allow_copy": investor.manager_allow_copy,
                             "message": f"Copying {'enabled' if investor.manager_allow_copy else 'disabled'} successfully.",
                         },
                         status=status.HTTP_200_OK,
@@ -189,7 +195,7 @@ class ToggleInvestorCopyView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        
+            
 class StatsOverviewView(APIView):
     """
     API endpoint to fetch client statistics overview in the format expected by frontend.
