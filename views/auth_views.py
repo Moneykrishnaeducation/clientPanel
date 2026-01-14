@@ -417,7 +417,7 @@ def client_login_view(request):
             ActivityLog.objects.create(
                 user=None,
                 activity="Login attempt - missing email or password",
-                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                ip_address=get_client_ip(request),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -463,7 +463,7 @@ def client_login_view(request):
             ActivityLog.objects.create(
                 user=None,
                 activity=f"Login attempt - user not found: {email}",
-                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                ip_address=get_client_ip(request),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -482,7 +482,7 @@ def client_login_view(request):
             ActivityLog.objects.create(
                 user=user,
                 activity="Login attempt - invalid password",
-                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                ip_address=get_client_ip(request),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -502,7 +502,7 @@ def client_login_view(request):
             ActivityLog.objects.create(
                 user=user,
                 activity="Login attempt - insufficient permissions",
-                ip_address=current_ip or request.META.get('REMOTE_ADDR', ''),
+                ip_address=get_client_ip(request),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
