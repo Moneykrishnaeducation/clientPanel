@@ -66,6 +66,31 @@ def verify_otp(stored_hash, provided_otp):
     except Exception:
         return False
 
+def hash_password(password):
+    """Hash password with salt for secure storage (hash+salt format)"""
+    salt = secrets.token_hex(16)  # Random 16-byte salt
+    password_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000  # Iterations
+    )
+    return f"{salt}${password_hash.hex()}"
+
+def verify_password(stored_hash, provided_password):
+    """Verify provided password against stored hash+salt"""
+    try:
+        salt, password_hash = stored_hash.split('$')
+        provided_hash = hashlib.pbkdf2_hmac(
+            'sha256',
+            provided_password.encode('utf-8'),
+            salt.encode('utf-8'),
+            100000
+        ).hex()
+        return provided_hash == password_hash
+    except Exception:
+        return False
+
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
@@ -172,16 +197,21 @@ def signup_view(request):
         if referral_code:
             parent_ib = CustomUser.objects.filter(referral_code=referral_code, IB_status=True).first()
 
-        user = CustomUser.objects.create_user(
+        # Hash password with salt+hash format
+        hashed_password = hash_password(password)
+        
+        user = CustomUser.objects.create(
             username=email,
             email=email,
-            password=password,
+            password=hashed_password,
             first_name=first_name,
             last_name=last_name,
             manager_admin_status='Client',  # Set as client
             parent_ib=parent_ib if parent_ib else None,
             referral_code_used=referral_code if referral_code else None
         )
+        user.set_password(hashed_password)  # Use the hashed password
+        user.save()
         
         # Send welcome email
         try:
@@ -445,8 +475,8 @@ def client_login_view(request):
             logger.exception("Failed to create user-not-found ActivityLog")
         return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # Verify password
-    if not user.check_password(password):
+    # Verify password using hash+salt verification
+    if not verify_password(user.password, password):
         # Log failed login attempt
         try:
             ActivityLog.objects.create(
@@ -1899,8 +1929,9 @@ def confirm_reset_password_view(request):
         user = CustomUser.objects.get(email=email)
         
         # For OTP-based reset, we don't need token validation since OTP was already verified
-        # Just reset the password and clear OTP
-        user.set_password(new_password)
+        # Just reset the password and clear OTP using hash+salt format
+        hashed_password = hash_password(new_password)
+        user.password = hashed_password
         user.otp = None
         user.otp_created_at = None
         user.save()
