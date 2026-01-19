@@ -482,7 +482,7 @@ class BasicUserInfoView(APIView):
 
 class IBStatusView(APIView):
     """
-    API endpoint to check IB approval status.
+    API endpoint to check IB approval status and update it.
     """
     authentication_classes = [BlacklistCheckingJWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -525,6 +525,79 @@ class IBStatusView(APIView):
         except Exception as e:
             return Response(
                 {"error": "Failed to fetch IB status", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def patch(self, request):
+        """
+        Update IB approval status (set to approved or pending).
+        Expected data: {"status": "approved"} or {"status": "pending"}
+        """
+        try:
+            user = request.user
+            
+            # Check if user is authenticated
+            if not user or not user.is_authenticated:
+                return Response(
+                    {"error": "Authentication required"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            
+            new_status = request.data.get("status", "").lower()
+            
+            # Validate status
+            if new_status not in ["approved", "pending"]:
+                return Response(
+                    {"error": "Invalid status. Must be 'approved' or 'pending'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+            # Update user's IB_status
+            previous_status = "approved" if user.IB_status else "pending"
+            user.IB_status = (new_status == "approved")
+            user.save()
+            
+            # Log activity
+            from adminPanel.views.views import get_client_ip
+            from django.utils.timezone import now
+            ActivityLog.objects.create(
+                user=user,
+                activity=f"Updated IB status from '{previous_status}' to '{new_status}'.",
+                ip_address=get_client_ip(request),
+                endpoint=request.path,
+                activity_type="update",
+                activity_category="client",
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=now(),
+                related_object_type="User"
+            )
+            
+            # Get updated user details
+            ib_status = getattr(user, "IB_status", False)
+            role = getattr(user, "role", None)
+            is_manager = role == "manager"
+            
+            if ib_status and not is_manager:
+                user_type = "parent_ib"
+            elif is_manager and ib_status:
+                user_type = "manager_with_ib"
+            elif is_manager:
+                user_type = "manager"
+            else:
+                user_type = "client"
+            
+            return Response({
+                "approved": ib_status or is_manager,
+                "status": "approved" if (ib_status or is_manager) else "pending",
+                "user_type": user_type,
+                "has_ib_status": ib_status,
+                "has_manager_role": is_manager,
+                "message": f"IB status updated successfully to '{new_status}'"
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {"error": "Failed to update IB status", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
