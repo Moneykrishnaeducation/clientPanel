@@ -1045,19 +1045,8 @@ class IBRequestView(APIView):
         try:
             ib_request = IBRequest.objects.get(user=request.user)
             # Use user's actual IB_status as the source of truth
-            actual_status = "approved" if request.user.IB_status else "pending"
-            
-            # Create response data with the actual status
-            response_data = {
-                "id": ib_request.id,
-                "username": ib_request.user.username,
-                "useremail": ib_request.user.email,
-                "status": actual_status,  # Use actual IB_status, not IBRequest.status
-                "created_at": ib_request.created_at,
-                "updated_at": ib_request.updated_at,
-                "user": ib_request.user.id
-            }
-            return Response(response_data, status=status.HTTP_200_OK)
+            serializer = IBRequestSerializer(ib_request)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         except IBRequest.DoesNotExist:
             return Response({"status": "No IB request found."}, status=status.HTTP_404_NOT_FOUND)
 
