@@ -524,7 +524,7 @@ def client_login_view(request):
         last_ip = None
 
     # If we have a last IP and it differs from the current one, require OTP verification before issuing tokens
-    if last_ip and current_ip and last_ip == current_ip:
+    if last_ip and current_ip and last_ip != current_ip:
         try:
             # Generate login-specific OTP and attach to user (separate from password-reset OTP)
             otp = f"{random.randint(100000, 999999)}"
@@ -1702,7 +1702,7 @@ def resend_login_otp_view(request):
             ActivityLog.objects.create(
                 user=None,
                 activity="OTP resend attempt - missing email",
-                ip_address=get_client_ip(request),
+                ip_address=request.META.get('REMOTE_ADDR', ''),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -1792,7 +1792,7 @@ def resend_login_otp_view(request):
             ActivityLog.objects.create(
                 user=None,
                 activity=f"OTP resend attempt - user not found: {email}",
-                ip_address=get_client_ip(request),
+                ip_address=request.META.get('REMOTE_ADDR', ''),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -1820,7 +1820,7 @@ def login_otp_status_view(request):
             ActivityLog.objects.create(
                 user=None,
                 activity="OTP status check - missing email",
-                ip_address=get_client_ip(request),
+                ip_address=request.META.get('REMOTE_ADDR', ''),
                 endpoint=request.path,
                 activity_type="create",
                 activity_category="client",
@@ -1991,7 +1991,7 @@ class VerifyOtpView(APIView):
                 ActivityLog.objects.create(
                     user=None,
                     activity="OTP verification attempt - missing email or OTP",
-                    ip_address=get_client_ip(request),
+                    ip_address=request.META.get('REMOTE_ADDR', ''),
                     endpoint=request.path,
                     activity_type="create",
                     activity_category="client",
