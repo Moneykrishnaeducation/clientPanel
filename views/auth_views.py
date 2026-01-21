@@ -480,7 +480,7 @@ def client_login_view(request):
     start_t = time.perf_counter()
     # Determine client IP early for rate-limiting and logging
     try:
-        current_ip = get_client_ip(request)
+        current_ip = normalize_ip(get_client_ip(request))
     except Exception:
         current_ip = None
 
@@ -557,7 +557,7 @@ def client_login_view(request):
     # Check previous login IP (best-effort). If previous IP exists and differs, require verification
     try:
         last_log = ActivityLog.objects.filter(user=user).order_by('-timestamp').first()
-        last_ip = last_log.ip_address if last_log else None
+        last_ip = normalize_ip(last_log.ip_address) if last_log else None
     except Exception:
         last_ip = None
 
