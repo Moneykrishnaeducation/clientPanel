@@ -410,6 +410,9 @@ urlpatterns = [
     # API endpoints first (before catch-all routes)
     path('api/', include((api_patterns, 'api'), namespace='api')),
     path('client/api/', include((api_patterns, 'client-api'))),  # <-- Added for /client/api/ compatibility
+    
+    # Chat endpoints
+    path('', include('brokerBackend.chat_urls')),
 
     # Direct login endpoints for both subdomain and path-based access
     path('login/', csrf_exempt(auth_views.client_login_view), name='direct-login'),
