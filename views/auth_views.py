@@ -100,6 +100,44 @@ def get_client_ip(request):
     return ip
 
 
+def normalize_ip(ip):
+    """Normalize an IP/address-like string for reliable comparison.
+
+    - Accepts comma-separated X-Forwarded-For lists and returns the first IP.
+    - Strips port components for IPv4 (e.g. 1.2.3.4:8000 -> 1.2.3.4).
+    - Handles bracketed IPv6 with port (e.g. [::1]:8000 -> ::1).
+    - Removes IPv6 zone indexes (e.g. fe80::1%lo0 -> fe80::1).
+    - Maps IPv6 localhost '::1' to '127.0.0.1' for local comparisons.
+    Returns None for falsy inputs.
+    """
+    try:
+        if not ip:
+            return None
+        s = str(ip).strip()
+        # If comma-separated (X-Forwarded-For), take first
+        if ',' in s:
+            s = s.split(',')[0].strip()
+        # Bracketed IPv6 like [::1]:8000 -> ::1
+        if s.startswith('[') and ']' in s:
+            s = s[1:s.rfind(']')]
+        # Remove IPv6 zone index if present
+        if '%' in s:
+            s = s.split('%', 1)[0]
+        # IPv4 with port (e.g. 1.2.3.4:8000)
+        if '.' in s and ':' in s:
+            # assume IPv4:port
+            s = s.split(':')[0]
+        # Normalize common localhost variants
+        if s == '::1':
+            s = '127.0.0.1'
+        return s
+    except Exception:
+        try:
+            return str(ip).strip()
+        except Exception:
+            return None
+
+
 def _check_rate_limit(key, limit, period_seconds):
     """Return True if the key is currently rate-limited.
 
