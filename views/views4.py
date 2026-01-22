@@ -504,7 +504,7 @@ class IBStatusView(APIView):
             is_manager = role == "manager"
 
             # Approve if IB_status is True (regardless of role), or if manager
-            is_approved = ib_status or is_manager
+            is_approved = ib_status
             if ib_status and not is_manager:
                 user_type = "parent_ib"  # IB only
             elif is_manager and ib_status:
