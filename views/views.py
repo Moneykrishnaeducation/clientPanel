@@ -2093,17 +2093,32 @@ class ClientUpdatePasswordView(APIView):
             account = get_object_or_404(TradingAccount, account_id=account_id, user=request.user)
             
             new_password = request.data.get("new_password")
+            password_type = request.data.get("password_type", "master")  # Default to master if not specified
+            
             if not new_password or len(new_password) < 8:
                 return Response(
                     {"error": "Password must be at least 8 characters long."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            
+            # Validate password type
+            if password_type not in ["master", "investor"]:
+                return Response(
+                    {"error": "Invalid password type. Must be 'master' or 'investor'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            # Remove account_id from request body since it's in the URL
-            if MT5ManagerActions().change_master_password(int(account_id), new_password):
+            # Call appropriate password change method based on type
+            mt5_manager = MT5ManagerActions()
+            if password_type == "master":
+                success = mt5_manager.change_master_password(int(account_id), new_password)
+            else:  # investor
+                success = mt5_manager.change_investor_password(int(account_id), new_password)
+            
+            if success:
                 ActivityLog.objects.create(
                     user=request.user,
-                    activity=f"Updated master password for account {account.account_id}.",
+                    activity=f"Updated {password_type} password for account {account.account_id}.",
                     ip_address=get_client_ip(request),
                     endpoint=request.path,
                     activity_type="update",
@@ -2117,14 +2132,15 @@ class ClientUpdatePasswordView(APIView):
                 # Return format matching what manage.js expects for handlePasswordUpdate
                 return Response({
                     "success": True,
-                    "message": "Password updated successfully",
+                    "message": f"{password_type.capitalize()} password updated successfully",
                     "data": {
-                        "account_id": account_id
+                        "account_id": account_id,
+                        "password_type": password_type
                     }
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({
-                    "error": "Failed to update password in MT5"
+                    "error": f"Failed to update {password_type} password in MT5"
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         except TradingAccount.DoesNotExist:
