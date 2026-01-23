@@ -2083,7 +2083,7 @@ class ClientUpdateLeverageView(APIView):
 
 class ClientUpdatePasswordView(APIView):
     """
-    API endpoint for clients to update their trading account password
+    API endpoint for clients to update their trading account investor password
     Endpoint: POST /api/update-password/{account_id}/
     Request body: { "new_password": "password123" }
     """
@@ -2093,7 +2093,6 @@ class ClientUpdatePasswordView(APIView):
             account = get_object_or_404(TradingAccount, account_id=account_id, user=request.user)
             
             new_password = request.data.get("new_password")
-            password_type = request.data.get("password_type", "master")  # Default to master if not specified
             
             if not new_password or len(new_password) < 8:
                 return Response(
@@ -2101,24 +2100,14 @@ class ClientUpdatePasswordView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             
-            # Validate password type
-            if password_type not in ["master", "investor"]:
-                return Response(
-                    {"error": "Invalid password type. Must be 'master' or 'investor'."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Call appropriate password change method based on type
+            # Only allow investor password updates
             mt5_manager = MT5ManagerActions()
-            if password_type == "master":
-                success = mt5_manager.change_master_password(int(account_id), new_password)
-            else:  # investor
-                success = mt5_manager.change_investor_password(int(account_id), new_password)
+            success = mt5_manager.change_investor_password(int(account_id), new_password)
             
             if success:
                 ActivityLog.objects.create(
                     user=request.user,
-                    activity=f"Updated {password_type} password for account {account.account_id}.",
+                    activity=f"Updated investor password for account {account.account_id}.",
                     ip_address=get_client_ip(request),
                     endpoint=request.path,
                     activity_type="update",
@@ -2132,15 +2121,15 @@ class ClientUpdatePasswordView(APIView):
                 # Return format matching what manage.js expects for handlePasswordUpdate
                 return Response({
                     "success": True,
-                    "message": f"{password_type.capitalize()} password updated successfully",
+                    "message": "Investor password updated successfully",
                     "data": {
                         "account_id": account_id,
-                        "password_type": password_type
+                        "password_type": "investor"
                     }
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({
-                    "error": f"Failed to update {password_type} password in MT5"
+                    "error": "Failed to update investor password in MT5"
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         except TradingAccount.DoesNotExist:
