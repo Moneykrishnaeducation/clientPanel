@@ -2177,7 +2177,8 @@ class VerifyOtpView(APIView):
                             'name': (
                                 f'{user.first_name} {user.last_name}'.strip()
                                 or user.username
-                            )
+                            ),
+                            'is_superuser': user.is_superuser
                         }
                     }
 
