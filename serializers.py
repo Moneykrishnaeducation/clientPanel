@@ -10,7 +10,7 @@ class BankDetailsSerializer(serializers.ModelSerializer):
 
 class CryptoDetailsSerializer(serializers.ModelSerializer):
 
-    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    user_id = serializers.IntegerField(source='user.user_id', read_only=True)
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.username', read_only=True)
     email = serializers.CharField(source='user.email', read_only=True)  # for frontend mapping
