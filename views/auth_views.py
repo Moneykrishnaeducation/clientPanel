@@ -516,68 +516,61 @@ def client_login_view(request):
 
     # `current_ip` was determined earlier for rate-limiting and is reused here
 
-    # Check previous login IP (best-effort). If previous IP exists and differs, require verification
+    # Always require OTP verification for login
+    # Generate OTP and send to user's email
     try:
-        last_log = ActivityLog.objects.filter(user=user).order_by('-timestamp').first()
-        last_ip = last_log.ip_address if last_log else None
-    except Exception:
-        last_ip = None
+        # Generate login-specific OTP and attach to user (separate from password-reset OTP)
+        otp = f"{random.randint(100000, 999999)}"
+        # Hash OTP before storing
+        hashed_otp = hash_otp(otp)
+        user.login_otp = hashed_otp
+        user.login_otp_created_at = timezone.now()
+        user.save(update_fields=["login_otp", "login_otp_created_at"])
 
-    # If we have a last IP and it differs from the current one, require OTP verification before issuing tokens
-    if last_ip and current_ip and last_ip != current_ip:
+        # Send OTP via email (best-effort)
+        email_sent = False
         try:
-            # Generate login-specific OTP and attach to user (separate from password-reset OTP)
-            otp = f"{random.randint(100000, 999999)}"
-            # Hash OTP before storing
-            hashed_otp = hash_otp(otp)
-            user.login_otp = hashed_otp
-            user.login_otp_created_at = timezone.now()
-            user.save(update_fields=["login_otp", "login_otp_created_at"])
+            # Use the dedicated login OTP email template for clarity
+            email_sent = EmailSender.send_login_otp_email(
+                user.email,
+                otp,
+                ip_address=current_ip,
+                login_time=timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+                first_name=user.first_name
+            )
+        except Exception:
+            logger.exception("Failed to send login OTP email to user")
 
-            # Send OTP via email (best-effort)
-            email_sent = False
+        if not email_sent:
+            # If email failed to send, fall back to normal login to avoid lockout
+            logger.warning("Login OTP email failed to send; falling back to normal login")
+        else:
+            # Record that a verification was required (non-blocking)
             try:
-                # Use the dedicated login OTP email template for clarity
-                email_sent = EmailSender.send_login_otp_email(
-                    user.email,
-                    otp,
+                ActivityLog.objects.create(
+                    user=user,
+                    activity="Login attempt - OTP verification required",
                     ip_address=current_ip,
-                    login_time=timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    first_name=user.first_name
+                    endpoint=request.path,
+                    activity_type="update",
+                    activity_category="client",
+                    status_code=202,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now(),
+                    related_object_id=user.id,
+                    related_object_type="LoginVerification"
                 )
             except Exception:
-                logger.exception("Failed to send login OTP email to user")
+                logger.exception("Failed to create ActivityLog for login verification requirement")
 
-            if not email_sent:
-                # If email failed to send, fall back to normal login to avoid lockout
-                logger.warning("Login OTP email failed to send; falling back to normal login")
-            else:
-                # Record that a verification was required (non-blocking)
-                try:
-                    ActivityLog.objects.create(
-                        user=user,
-                        activity="Login attempt - verification required (new IP)",
-                        ip_address=current_ip,
-                        endpoint=request.path,
-                        activity_type="update",
-                        activity_category="client",
-                        status_code=202,
-                        user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                        timestamp=timezone.now(),
-                        related_object_id=user.id,
-                        related_object_type="LoginVerification"
-                    )
-                except Exception:
-                    logger.exception("Failed to create ActivityLog for login verification requirement")
-
-                # Tell frontend verification is required. Do not issue tokens yet.
-                return Response({
-                    'verification_required': True,
-                    'message': 'A verification code was sent to your email because this login originates from a new IP address.'
-                }, status=status.HTTP_202_ACCEPTED)
-        except Exception:
-            # If anything in the verification-path fails, log and continue to allow login to avoid lockout
-            logger.exception("Error while requiring login verification; falling back to normal login")
+            # Tell frontend verification is required. Do not issue tokens yet.
+            return Response({
+                'verification_required': True,
+                'message': 'A verification code was sent to your email. Please verify to continue.'
+            }, status=status.HTTP_202_ACCEPTED)
+    except Exception:
+        # If anything in the verification-path fails, log and continue to allow login to avoid lockout
+        logger.exception("Error while requiring login verification; falling back to normal login")
 
     # --- Issue tokens and record login in background for non-new-IP logins ---
     refresh = RefreshToken.for_user(user)
