@@ -127,7 +127,7 @@
             <h1>Verification OTP From - VTIndex</h1>
         </div>
         <div class="content">
-            <h2>Hello {{ first_name }},</h2>
+            <h2>Hello {{ user_name }},</h2>
             <p>Your OTP for resetting your password is:</p>
             <div class="otp-box">{{ otp }}</div>
             <p>This OTP will expire in <strong>10 minutes</strong>.</p>
@@ -135,7 +135,7 @@
         </div>
         <div class="footer">
             <p>For support, contact us at <a href="mailto:support@vtindex.com">support@vtindex.com</a>.</p>
-            <p>&copy; VTIndex. All rights reserved.</p>
+            <p>&copy; {{ current_year }} {{ company_name }}. All rights reserved.</p>
         </div>
     </div>
 </body>

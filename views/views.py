@@ -681,7 +681,7 @@ class IBClientTreeView(APIView):
                 if user_id not in accounts_by_user:
                     accounts_by_user[user_id] = []
                 accounts_by_user[user_id].append(acct)
-                all_account_ids.append(acct.account_id)
+                all_account_ids.append(acct.id)
 
             # Bulk load all transactions for these accounts
             transactions = Transaction.objects.filter(
@@ -802,10 +802,10 @@ class IBClientTreeView(APIView):
                         'account_id': acct.account_id,
                         'account_type': acct.account_type,
                         'balance': float(acct.balance or 0),
-                        'total_lots': float(total_lots),
-                        'total_deposits': float(deposits),
-                        'total_withdrawals': float(withdrawals),
-                        'total_commission': float(total_commission),
+                        'total_lots': float(round((total_lots or 0), 2)),
+                        'total_deposits': float(round((deposits or 0), 2)),
+                        'total_withdrawals': float(round((withdrawals or 0), 2)),
+                        'total_commission': float(round((total_commission or 0), 2)),
                         'group_name': acct.group_name or '',
                         'group_alias': group_alias,
                         'group_id': group_identifier,
