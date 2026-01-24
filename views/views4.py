@@ -609,7 +609,8 @@ class IBCommissionTransactionsView(APIView):
             ).exclude(
                 client_trading_account__account_type='demo'
             ).order_by('-created_at').values(
-                'position_id', 'client_user__email', 'client_trading_account__id', 'client_trading_account__account_id',
+                'position_id', 'client_user__first_name', 'client_user__last_name', 'client_user__email', 
+                'client_trading_account__id', 'client_trading_account__account_id',
                 'position_symbol', 'total_commission', 'commission_to_ib', 'lot_size', 'profit', 'position_type', 
                 'position_direction', 'created_at', 'deal_ticket', 'mt5_close_time'
             )
@@ -618,7 +619,8 @@ class IBCommissionTransactionsView(APIView):
             data_list = [
                 {
                     'position_id': t['position_id'],
-                    'client_user': t['client_user__email'],
+                    'client_user': f"{t['client_user__first_name']} {t['client_user__last_name']}".strip(),  # Combined first and last name
+                    'client_user_email': t['client_user__email'],
                     'client_trading_account': t['client_trading_account__account_id'],  # Use actual MT5 account number
                     'position_symbol': t['position_symbol'],
                     'total_commission': float(t.get('total_commission') or 0.0),
