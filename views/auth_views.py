@@ -527,18 +527,10 @@ def client_login_view(request):
         user.login_otp_created_at = timezone.now()
         user.save(update_fields=["login_otp", "login_otp_created_at"])
 
-<<<<<<< HEAD
-        # Send OTP via email (best-effort)
-        email_sent = False
-        try:
-            # Use the dedicated login OTP email template for clarity
-            email_sent = EmailSender.send_login_otp_email(
-=======
         # Send OTP via email
         try:
             # Use the dedicated login OTP email template for clarity
             EmailSender.send_login_otp_email(
->>>>>>> 6a6fe1523afd16fff069eceb44be29d636fa423f
                 user.email,
                 otp,
                 ip_address=current_ip,
@@ -548,35 +540,6 @@ def client_login_view(request):
         except Exception:
             logger.exception("Failed to send login OTP email to user")
 
-<<<<<<< HEAD
-        if not email_sent:
-            # If email failed to send, fall back to normal login to avoid lockout
-            logger.warning("Login OTP email failed to send; falling back to normal login")
-        else:
-            # Record that a verification was required (non-blocking)
-            try:
-                ActivityLog.objects.create(
-                    user=user,
-                    activity="Login attempt - OTP verification required",
-                    ip_address=current_ip,
-                    endpoint=request.path,
-                    activity_type="update",
-                    activity_category="client",
-                    status_code=202,
-                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                    timestamp=timezone.now(),
-                    related_object_id=user.id,
-                    related_object_type="LoginVerification"
-                )
-            except Exception:
-                logger.exception("Failed to create ActivityLog for login verification requirement")
-
-            # Tell frontend verification is required. Do not issue tokens yet.
-            return Response({
-                'verification_required': True,
-                'message': 'A verification code was sent to your email. Please verify to continue.'
-            }, status=status.HTTP_202_ACCEPTED)
-=======
         # Record that a verification was required (non-blocking)
         try:
             ActivityLog.objects.create(
@@ -600,7 +563,6 @@ def client_login_view(request):
             'verification_required': True,
             'message': 'A verification code was sent to your email. Please verify to continue.'
         }, status=status.HTTP_202_ACCEPTED)
->>>>>>> 6a6fe1523afd16fff069eceb44be29d636fa423f
     except Exception:
         # If anything in the verification-path fails, log and continue to allow login to avoid lockout
         logger.exception("Error while requiring login verification; falling back to normal login")
