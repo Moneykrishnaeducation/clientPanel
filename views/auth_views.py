@@ -125,6 +125,33 @@ def _check_rate_limit(key, limit, period_seconds):
         return False
 
 
+def _resolve_mx_with_retries(domain, attempts=3, base_delay=0.5):
+    """Resolve MX records with simple exponential backoff.
+
+    Returns True if MX records found, False if NXDOMAIN/NoAnswer, and raises for resolver misconfigurations.
+    """
+    try:
+        import dns.resolver
+    except Exception:
+        raise
+
+    for i in range(attempts):
+        try:
+            answers = dns.resolver.resolve(domain, 'MX')
+            return bool(answers)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return False
+        except Exception:
+            # transient error: retry with backoff
+            if i == attempts - 1:
+                raise
+            try:
+                time.sleep(base_delay * (2 ** i))
+            except Exception:
+                pass
+    return False
+
+
 def compute_redirect_url(request, frontend_role):
     """Compute redirect URL based on request host and user role.
 
@@ -662,6 +689,24 @@ def client_login_view(request):
 
     response = Response(resp_body, status=status.HTTP_200_OK)
     response['X-Login-Duration-ms'] = str(duration_ms)
+    # Reset login rate limits for this IP/email on successful login
+    try:
+        try:
+            current_ip = get_client_ip(request)
+        except Exception:
+            current_ip = None
+        if current_ip:
+            try:
+                cache.delete(f"rl:login:ip:{current_ip}")
+            except Exception:
+                logger.exception('Failed to clear IP login rate limit cache')
+        try:
+            if email:
+                cache.delete(f"rl:login:email:{email.strip().lower()}")
+        except Exception:
+            logger.exception('Failed to clear email login rate limit cache')
+    except Exception:
+        logger.exception('Unexpected error while clearing login rate limits')
     
     # Set HttpOnly cookies for API and client usage using CookieManager
     try:
@@ -779,6 +824,94 @@ def send_signup_otp_view(request):
     email = request.data.get('email')
     if not email:
         return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Reject disposable/temporary email providers early to avoid sending OTPs
+    try:
+        from adminPanel.utils.email_validation import validate_signup_email
+        validate_signup_email(email)
+    except ValueError:
+        try:
+            ActivityLog.objects.create(
+                user=None,
+                activity="Signup OTP blocked - disposable email",
+                ip_address=get_client_ip(request),
+                endpoint=request.path,
+                activity_type="create",
+                activity_category="client",
+                status_code=400,
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                timestamp=timezone.now(),
+            )
+        except Exception:
+            logger.exception('Failed to log blocked signup OTP due to disposable email')
+        logger.info('Blocked signup OTP for disposable email: %s', email)
+        return Response({'error': 'Disposable or temporary email addresses are not allowed'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        # If the validator fails unexpectedly, continue rather than blocking all signups
+        pass
+
+    # Strict MX check: require dnspython and verify MX records when configured
+    require_mx = getattr(settings, 'REQUIRE_MX_CHECK', True)
+    domain = None
+    try:
+        domain = email.split('@', 1)[1]
+    except Exception:
+        return Response({'error': 'Invalid email address'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if require_mx:
+        try:
+            has_mx = _resolve_mx_with_retries(domain, attempts=getattr(settings, 'MX_RESOLVE_ATTEMPTS', 3), base_delay=0.5)
+            if not has_mx:
+                try:
+                    ActivityLog.objects.create(
+                        user=None,
+                        activity="Signup OTP blocked - no MX records",
+                        ip_address=get_client_ip(request),
+                        endpoint=request.path,
+                        activity_type="create",
+                        activity_category="client",
+                        status_code=400,
+                        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                        timestamp=timezone.now(),
+                    )
+                except Exception:
+                    logger.exception('Failed to log blocked signup OTP due to missing MX')
+                logger.info('Blocked signup OTP for domain with no MX: %s', domain)
+                return Response({'error': 'Email domain does not accept mail (no MX records found)'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception('MX lookup failed for domain %s', domain)
+            return Response({'error': 'Temporary DNS lookup failure validating email domain'}, status=503)
+
+    # If configured, run a third-party verification provider for stronger checks
+    try:
+        from adminPanel.utils.email_verification import verify_email_third_party
+        ok, reason = verify_email_third_party(email)
+        if not ok:
+            # Log and provide friendly message for common reasons
+            try:
+                ActivityLog.objects.create(
+                    user=None,
+                    activity=f"Signup OTP blocked - third-party verification failed: {reason}",
+                    ip_address=get_client_ip(request),
+                    endpoint=request.path,
+                    activity_type="create",
+                    activity_category="client",
+                    status_code=400,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now(),
+                )
+            except Exception:
+                logger.exception('Failed to log blocked signup OTP due to third-party verification')
+
+            logger.info('Blocked signup OTP due to third-party verification failure (%s) for %s', reason, email)
+
+            msg = 'Email address failed external verification.'
+            if reason and reason not in ('error', 'unknown', 'none', 'no_key'):
+                msg = f"Email verification failed: {reason}"
+            return Response({'error': msg}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        # If provider integration fails unexpectedly, log and continue
+        logger.exception('Third-party email verification check failed')
 
     try:
         # Determine client IP and enforce per-IP send limit (default 5/hour)
@@ -2136,6 +2269,27 @@ class VerifyOtpView(APIView):
                     user.login_otp = None
                     user.login_otp_created_at = None
                     user.save(update_fields=['login_otp', 'login_otp_created_at'])
+
+                    # Clear OTP-related rate limits on successful verification
+                    try:
+                        try:
+                            # rl_key used earlier for verification rate-limit
+                            cache.delete(f"rl:otp:email:{email.strip().lower()}")
+                        except Exception:
+                            logger.exception('Failed to clear rl:otp:email rate limit')
+                        try:
+                            # Also clear send-rate keys for this email and IP to allow fresh sends
+                            cache.delete(f"rl:otp:send:email:{email.strip().lower()}")
+                        except Exception:
+                            logger.exception('Failed to clear rl:otp:send:email rate limit')
+                        try:
+                            ip_addr = get_client_ip(request)
+                            if ip_addr:
+                                cache.delete(f"rl:otp:send:ip:{ip_addr}")
+                        except Exception:
+                            logger.exception('Failed to clear rl:otp:send:ip rate limit')
+                    except Exception:
+                        logger.exception('Unexpected error while clearing OTP rate limits')
 
                     # Log activity (non-blocking)
                     try:
