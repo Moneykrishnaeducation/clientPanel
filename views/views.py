@@ -118,6 +118,115 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
 
 logger = logging.getLogger(__name__)
+from PIL import Image
+import io
+import re
+try:
+    from PyPDF2 import PdfReader
+except Exception:
+    PdfReader = None
+
+
+def validate_upload_file(uploaded_file, max_size_mb=10):
+    """Verify that `uploaded_file` is a valid image or PDF and not a script-containing PDF.
+
+    Returns (True, None) on success, or (False, error_message) on failure.
+    """
+    if not uploaded_file:
+        return False, "No file provided"
+
+    # Size check
+    try:
+        size = int(getattr(uploaded_file, 'size', 0))
+    except Exception:
+        size = 0
+    if size > max_size_mb * 1024 * 1024:
+        return False, f"File size exceeds {max_size_mb} MB"
+
+    content_type = (getattr(uploaded_file, 'content_type', '') or '').lower()
+    name = (getattr(uploaded_file, 'name', '') or '').lower()
+
+    # Image verification
+    if content_type.startswith('image/') or name.endswith(('.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif')):
+        try:
+            # Pillow can operate on file-like objects; ensure pointer at start
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            img = Image.open(uploaded_file)
+            img.verify()
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            return True, None
+        except Exception:
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            return False, "Uploaded file is not a valid image"
+
+    # PDF verification
+    if content_type == 'application/pdf' or name.endswith('.pdf'):
+        try:
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            header = uploaded_file.read(8192) or b''
+            lower_head = header.lower() if isinstance(header, (bytes, bytearray)) else str(header).lower().encode('utf-8')
+            # Look for script or action keywords inside the first chunk
+
+            # Ensure the file actually looks like a PDF (contains %PDF header)
+            if b'%pdf-' not in lower_head:
+                try:
+                    uploaded_file.seek(0)
+                except Exception:
+                    pass
+                return False, "File does not have a valid PDF header"
+
+            # Look for PDF-specific script/action keywords and common embedded script patterns
+            suspicious = [b'/javascript', b'/js', b'/openaction', b'/aa', b'<script', b'javascript:']
+            
+            for s in suspicious:
+                if s in lower_head:
+                    try:
+                        uploaded_file.seek(0)
+                    except Exception:
+                        pass
+                    return False, "PDF contains scripting or action objects"
+
+            # If a PDF parser is available, try to parse to ensure it's well-formed
+            if PdfReader is not None:
+                try:
+                    try:
+                        uploaded_file.seek(0)
+                    except Exception:
+                        pass
+                    # PdfReader accepts file-like objects
+                    PdfReader(uploaded_file)
+                except Exception:
+                    try:
+                        uploaded_file.seek(0)
+                    except Exception:
+                        pass
+                    return False, "Malformed or unreadable PDF"
+
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            return True, None
+        except Exception:
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+            return False, "Invalid PDF file"
+
+    return False, "Unsupported file type"
 
 # Project imports
 from clientPanel.models import BankDetails
@@ -1234,6 +1343,13 @@ class ManualDepositView(APIView):
                     {"error": "All fields (mam_id, amount, proof) are required."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
+            # Validate uploaded proof (image or PDF)
+            is_valid, validation_err = validate_upload_file(proof, max_size_mb=10)
+            if not is_valid:
+                return Response({"error": f"Invalid proof file: {validation_err}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            
             try:
                 # Try resolving mam_id as a PAMAccount first (by PAM id or by MT5 login).
                 # This allows manual deposits to target a PAMM manager account even
@@ -1408,7 +1524,6 @@ class ManualDepositView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         
-
 # ✅ CheesePay Initiate View
 @method_decorator(csrf_exempt, name='dispatch')
 class CheesePayInitiateView(APIView):
@@ -1559,7 +1674,6 @@ class CheesePayInitiateView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
             
-            
 class USDTDepositView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]  
@@ -1576,8 +1690,11 @@ class USDTDepositView(APIView):
                     {"error": "All fields (mam_id, amount, proof) are required."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Validate uploaded proof (image or PDF)
+            is_valid, validation_err = validate_upload_file(proof, max_size_mb=10)
+            if not is_valid:
+                return Response({"error": f"Invalid proof file: {validation_err}"}, status=status.HTTP_400_BAD_REQUEST)
 
-            
             try:
                 account = TradingAccount.objects.get(account_id=mam_id, user=request.user)
             except TradingAccount.DoesNotExist:

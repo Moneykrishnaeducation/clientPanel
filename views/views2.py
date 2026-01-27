@@ -28,7 +28,11 @@ from adminPanel.models import *
 from adminPanel.serializers import *
 from adminPanel.views.views import get_client_ip, generate_password
 
+# Runtime import helper: validate_upload_file is defined in clientPanel.views.views
+# Import dynamically inside request handlers to avoid circular import at module import time.
+
 # Now define TicketsView after all imports
+
 class TicketsView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -67,6 +71,23 @@ class TicketsView(APIView):
                 print(f"CreateTicketView: received {len(files)} files")
             except Exception:
                 pass
+            # Deep-validate attachments using shared helper if available
+            try:
+                from clientPanel.views.views import validate_upload_file
+            except Exception:
+                validate_upload_file = None
+
+            if validate_upload_file is not None:
+                for f in files:
+                    is_valid, err = validate_upload_file(f, max_size_mb=10)
+                    if not is_valid:
+                        return Response({"error": f"Invalid attachment {getattr(f, 'name', 'file')}: {err}"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                try:
+                    logger = logging.getLogger(__name__)
+                    logger.warning('validate_upload_file not available; skipping deep attachment validation')
+                except Exception:
+                    pass
             ticket_data = {
                 "subject": data.get("subject"),
                 "description": data.get("description"),
@@ -357,6 +378,24 @@ class CreateTicketView(APIView):
         try:
             data = request.data
             files = request.FILES.getlist("documents")
+
+            # Deep-validate attachments using shared helper if available
+            try:
+                from clientPanel.views.views import validate_upload_file
+            except Exception:
+                validate_upload_file = None
+
+            if validate_upload_file is not None:
+                for f in files:
+                    is_valid, err = validate_upload_file(f, max_size_mb=10)
+                    if not is_valid:
+                        return Response({"error": f"Invalid attachment {getattr(f, 'name', 'file')}: {err}"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                try:
+                    logger = logging.getLogger(__name__)
+                    logger.warning('validate_upload_file not available; skipping deep attachment validation')
+                except Exception:
+                    pass
 
             
             ticket_data = {

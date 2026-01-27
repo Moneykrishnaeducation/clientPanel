@@ -1,4 +1,9 @@
 from rest_framework.views import APIView
+from PIL import Image
+try:
+    from PyPDF2 import PdfReader
+except Exception:
+    PdfReader = None
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from rest_framework.response import Response
 from rest_framework import status
@@ -987,6 +992,84 @@ class UserDocumentView(APIView):
         if file.size > 10 * 1024 * 1024:
             return False, 'File too large. Maximum size is 10MB'
             
+        # Perform deeper validation for images and PDFs to avoid script uploads
+        try:
+            file.seek(0)
+        except Exception:
+            pass
+
+        if file.content_type.startswith('image/'):
+            try:
+                img = Image.open(file)
+                img.verify()
+                # rewind after verify
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
+            except Exception:
+                return False, 'Uploaded file is not a valid image'
+
+        if file.content_type == 'application/pdf':
+            try:
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
+                raw = file.read(8192) or b''
+                if isinstance(raw, str):
+                    raw = raw.encode('latin1', errors='ignore')
+                lowered = raw.lower()
+
+                # Ensure the file contains a PDF header
+                if b'%pdf-' not in lowered:
+                    try:
+                        file.seek(0)
+                    except Exception:
+                        pass
+                    return False, 'File does not have a valid PDF header'
+
+                # Look for scripting or active content tokens
+                suspicious = [b'/javascript', b'/js', b'/openaction', b'/aa', b'<script', b'javascript:']
+                for s in suspicious:
+                    if s in lowered:
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                        return False, 'PDF contains scripting or embedded active content'
+
+                # If available, parse the PDF to ensure it's well-formed
+                if PdfReader is not None:
+                    try:
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                        _ = PdfReader(file)
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                    except Exception:
+                        try:
+                            file.seek(0)
+                        except Exception:
+                            pass
+                        return False, 'Malformed or unreadable PDF'
+
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
+                return True, None
+            except Exception:
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
+                return False, 'Uploaded file is not a valid PDF'
+
         return True, None
 
     def get(self, request, document_type=None):
@@ -1215,6 +1298,22 @@ class UserProfileBannerView(APIView):
 
             if banner_file.size > 8 * 1024 * 1024:
                 return Response({'error': 'File too large. Maximum size is 8MB'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Additional verification using Pillow to ensure it's a real image
+            try:
+                try:
+                    banner_file.seek(0)
+                except Exception:
+                    pass
+                img = Image.open(banner_file)
+                img.verify()
+                try:
+                    banner_file.seek(0)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"Banner verification failed: {e}")
+                return Response({'error': 'Uploaded banner is not a valid image'}, status=status.HTTP_400_BAD_REQUEST)
 
             user = request.user
             prefix = self._safe_prefix(user)
@@ -1465,6 +1564,22 @@ class UserProfileImageView(APIView):
             
             # Update user's profile picture
             try:
+                # Additional verification using Pillow to ensure it's a real image
+                try:
+                    image_file.seek(0)
+                except Exception:
+                    pass
+                try:
+                    img = Image.open(image_file)
+                    img.verify()
+                    try:
+                        image_file.seek(0)
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.error("Uploaded profile image failed verification")
+                    return Response({"error": "Uploaded file is not a valid image."}, status=status.HTTP_400_BAD_REQUEST)
+
                 # Delete old profile picture file if it exists. Use FieldFile.path when available
                 if user.profile_pic:
                     try:
