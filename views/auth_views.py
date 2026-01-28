@@ -244,7 +244,9 @@ def signup_view(request):
             parent_ib=parent_ib if parent_ib else None,
             referral_code_used=referral_code if referral_code else None
         )
-        user.set_password(hashed_password)  # Use the hashed password
+        # Intentionally store our custom salt$hex password format
+        # Do not call Django's `set_password()` here because we use
+        # `hash_password()`/`verify_password()` pair for authentication.
         user.save()
         
         # Send welcome email
