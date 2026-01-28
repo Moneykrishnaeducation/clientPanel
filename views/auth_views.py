@@ -16,6 +16,7 @@ from django.utils import timezone
 import random
 import secrets
 import jwt
+import sys
 from jwt import PyJWKClient
 from adminPanel.models import ActivityLog
 from django.contrib.auth.tokens import default_token_generator
@@ -128,11 +129,17 @@ def _check_rate_limit(key, limit, period_seconds):
 def _resolve_mx_with_retries(domain, attempts=3, base_delay=0.5):
     """Resolve MX records with simple exponential backoff.
 
-    Returns True if MX records found, False if NXDOMAIN/NoAnswer, and raises for resolver misconfigurations.
+    Returns True if MX records found, False if NXDOMAIN/NoAnswer,
+    None if dnspython is not available (caller may choose fallback),
+    and raises for other resolver misconfigurations.
     """
     try:
         import dns.resolver
+    except ModuleNotFoundError:
+        logger.warning('dnspython not installed; skipping MX checks (install with: pip install dnspython). executable=%s path=%s', sys.executable, sys.path)
+        return None
     except Exception:
+        # Unexpected import error: re-raise for caller to handle
         raise
 
     for i in range(attempts):
@@ -861,7 +868,10 @@ def send_signup_otp_view(request):
     if require_mx:
         try:
             has_mx = _resolve_mx_with_retries(domain, attempts=getattr(settings, 'MX_RESOLVE_ATTEMPTS', 3), base_delay=0.5)
-            if not has_mx:
+            # If `None` is returned, dnspython isn't installed; log and continue to provider checks
+            if has_mx is None:
+                logger.warning('MX check skipped for domain %s because dnspython is unavailable', domain)
+            elif not has_mx:
                 try:
                     ActivityLog.objects.create(
                         user=None,
