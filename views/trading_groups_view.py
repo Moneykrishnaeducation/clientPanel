@@ -48,6 +48,10 @@ class TradingGroupsView(APIView):
                 # Server-side: only include real groups that have an explicit, non-empty alias
                 filtered_groups = active_groups.filter(alias__isnull=False).exclude(alias__exact='')
 
+            # Additionally, exclude any group whose alias contains 'cent' in any casing
+            # (covers 'cent', 'Cent', 'cENT', etc.). This applies to both demo and real results.
+            filtered_groups = filtered_groups.exclude(alias__icontains='cent')
+
             groups_data = []
             for group in filtered_groups:
                 groups_data.append({
