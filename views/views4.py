@@ -46,6 +46,7 @@ class IBReferralLinkView(APIView):
         return Response({"referral_link": referral_link, "referral_code": user.referral_code}, status=status.HTTP_200_OK)
 from adminPanel.mt5.services import MT5ManagerActions
 from django.db import transaction
+from django.db import models
 from django.core.exceptions import ValidationError
 from django.utils.timezone import now
 from adminPanel.models import CustomUser, TradingAccount, ActivityLog, Transaction, DemoAccount, CommissionTransaction, IBRequest
@@ -797,10 +798,78 @@ class InternalTransferView(APIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-                # Perform MT5 transfer
+                # Helper function to check if account is CENT type
+                def is_cent_account(account):
+                    """Check if account uses CENT alias by querying MT5 and TradeGroup"""
+                    try:
+                        from adminPanel.models import TradeGroup
+                        
+                        # Get group from MT5 directly
+                        mt5_check = MT5ManagerActions()
+                        mt5_group = mt5_check.get_group_of(int(account.account_id))
+                        
+                        if mt5_group:
+                            # Check for common CENT patterns in the group name
+                            # Pattern 1: Contains "cent" in the name
+                            if 'cent' in mt5_group.lower():
+                                return True
+                            
+                            # Pattern 2: Contains "-C-" which typically indicates CENT (e.g., "KRSNA-C-CRM")
+                            if '-c-' in mt5_group.lower():
+                                return True
+                            
+                            # Pattern 3: Query TradeGroup by the MT5 group name or group_id and check alias
+                            trade_group = TradeGroup.objects.filter(
+                                models.Q(name=mt5_group) | models.Q(group_id=mt5_group)
+                            ).first()
+                            
+                            if trade_group and trade_group.alias and trade_group.alias.upper() == 'CENT':
+                                return True
+                        
+                        # Fallback: check if group_name field contains "cent"
+                        if account.group_name and 'cent' in account.group_name.lower():
+                            return True
+                            
+                    except Exception as e:
+                        # Log the error for debugging
+                        print(f"Error checking CENT account for {account.account_id}: {e}")
+                        pass
+                    
+                    return False
+
+                from_is_cent = is_cent_account(from_account)
+                to_is_cent = is_cent_account(to_account)
+                
+                # MT5 internal_transfer withdraws from source and deposits to destination
+                # We need to handle CENT conversion by using separate operations
                 mt5action = MT5ManagerActions()
-                if not mt5action.internal_transfer(int(to_account_id), int(from_account_id), amount):
-                    raise ValidationError('MT5 transfer failed')
+                
+                if from_is_cent and not to_is_cent:
+                    # Transferring FROM CENT to regular: amount is in cents, convert to USD
+                    # Withdraw 'amount' cents from CENT, deposit 'amount/100' USD to regular
+                    withdraw_amount = amount
+                    deposit_amount = amount / 100
+                    if not mt5action.withdraw_funds(int(from_account_id), withdraw_amount, f"Internal transfer to {to_account_id}"):
+                        raise ValidationError('MT5 transfer failed: Could not withdraw from source')
+                    if not mt5action.deposit_funds(int(to_account_id), deposit_amount, f"Internal transfer from {from_account_id}"):
+                        # Rollback: deposit back to source
+                        mt5action.deposit_funds(int(from_account_id), withdraw_amount, f"Rollback transfer to {to_account_id}")
+                        raise ValidationError('MT5 transfer failed: Could not deposit to destination')
+                elif not from_is_cent and to_is_cent:
+                    # Transferring FROM regular to CENT: amount is in USD, convert to cents
+                    # Withdraw 'amount' USD from regular, deposit 'amount*100' cents to CENT
+                    withdraw_amount = amount
+                    deposit_amount = amount * 100
+                    if not mt5action.withdraw_funds(int(from_account_id), withdraw_amount, f"Internal transfer to {to_account_id}"):
+                        raise ValidationError('MT5 transfer failed: Could not withdraw from source')
+                    if not mt5action.deposit_funds(int(to_account_id), deposit_amount, f"Internal transfer from {from_account_id}"):
+                        # Rollback: deposit back to source
+                        mt5action.deposit_funds(int(from_account_id), withdraw_amount, f"Rollback transfer to {to_account_id}")
+                        raise ValidationError('MT5 transfer failed: Could not deposit to destination')
+                else:
+                    # Both CENT or both regular: standard 1:1 transfer
+                    if not mt5action.internal_transfer(int(to_account_id), int(from_account_id), amount):
+                        raise ValidationError('MT5 transfer failed')
 
                 # Create transaction record
                 transaction_obj = Transaction.objects.create(
