@@ -840,36 +840,18 @@ class InternalTransferView(APIView):
                 from_is_cent = is_cent_account(from_account)
                 to_is_cent = is_cent_account(to_account)
                 
-                # MT5 internal_transfer withdraws from source and deposits to destination
-                # We need to handle CENT conversion by using separate operations
-                mt5action = MT5ManagerActions()
+                # Block CENT conversions for client panel - only allow same-type transfers
+                if from_is_cent != to_is_cent:
+                    # One account is CENT and the other is regular - block this transfer
+                    return Response({
+                        'error': 'Transfers between CENT and regular accounts are not allowed in the client panel. Please contact our support team for assistance with this type of transfer.',
+                        'code': 'cent_conversion_blocked'
+                    }, status=status.HTTP_400_BAD_REQUEST)
                 
-                if from_is_cent and not to_is_cent:
-                    # Transferring FROM CENT to regular: amount is in cents, convert to USD
-                    # Withdraw 'amount' cents from CENT, deposit 'amount/100' USD to regular
-                    withdraw_amount = amount
-                    deposit_amount = amount / 100
-                    if not mt5action.withdraw_funds(int(from_account_id), withdraw_amount, f"Internal transfer to {to_account_id}"):
-                        raise ValidationError('MT5 transfer failed: Could not withdraw from source')
-                    if not mt5action.deposit_funds(int(to_account_id), deposit_amount, f"Internal transfer from {from_account_id}"):
-                        # Rollback: deposit back to source
-                        mt5action.deposit_funds(int(from_account_id), withdraw_amount, f"Rollback transfer to {to_account_id}")
-                        raise ValidationError('MT5 transfer failed: Could not deposit to destination')
-                elif not from_is_cent and to_is_cent:
-                    # Transferring FROM regular to CENT: amount is in USD, convert to cents
-                    # Withdraw 'amount' USD from regular, deposit 'amount*100' cents to CENT
-                    withdraw_amount = amount
-                    deposit_amount = amount * 100
-                    if not mt5action.withdraw_funds(int(from_account_id), withdraw_amount, f"Internal transfer to {to_account_id}"):
-                        raise ValidationError('MT5 transfer failed: Could not withdraw from source')
-                    if not mt5action.deposit_funds(int(to_account_id), deposit_amount, f"Internal transfer from {from_account_id}"):
-                        # Rollback: deposit back to source
-                        mt5action.deposit_funds(int(from_account_id), withdraw_amount, f"Rollback transfer to {to_account_id}")
-                        raise ValidationError('MT5 transfer failed: Could not deposit to destination')
-                else:
-                    # Both CENT or both regular: standard 1:1 transfer
-                    if not mt5action.internal_transfer(int(to_account_id), int(from_account_id), amount):
-                        raise ValidationError('MT5 transfer failed')
+                # Both accounts are the same type (both CENT or both regular) - proceed with standard transfer
+                mt5action = MT5ManagerActions()
+                if not mt5action.internal_transfer(int(to_account_id), int(from_account_id), amount):
+                    raise ValidationError('MT5 transfer failed')
 
                 # Create transaction record
                 transaction_obj = Transaction.objects.create(
