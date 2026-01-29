@@ -80,7 +80,7 @@ from .views.views4 import (
     UserProfileImageView, UserDocumentView, UserProfileView, UserProfileBannerView, UserBankDetailsView, 
     UserCryptoDetailsView, CreateUserView, InternalTransferView,
     ToggleInvestorCopyView, IBStatusView, IBCommissionBalanceView, 
-    IBCommissionTransactionsView, IBTransactionsView, IBReferralLinkView
+    IBCommissionTransactionsView, IBTransactionsView, IBReferralLinkView, CheckCentAccountView
 )
 # Reuse the admin ticket detail view for client-side ticket detail requests
 try:
@@ -235,6 +235,9 @@ api_patterns = [
     path('cheezepay-notify/', csrf_exempt(CheesePayNotifyView.as_view()), name='api-cheezepay-notify'),
     path('cheezepay-notify', csrf_exempt(CheesePayNotifyView.as_view()), name='api-cheezepay-notify-no-slash'),
 
+    # Account type checking
+    path('check-cent-account/<str:account_id>/', CheckCentAccountView.as_view(), name='api-check-cent-account'),
+    
     # Test endpoint for debugging
     path('auth-test/', AuthTestView.as_view(), name='api-auth-test'),
 

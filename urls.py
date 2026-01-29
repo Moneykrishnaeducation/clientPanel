@@ -20,7 +20,7 @@ from .views.views2 import ResetDemoBalanceView
 from .views.views4 import (
     InternalTransferView, UserDocumentView, UserProfileView, IBReferralLinkView, IBTradingAccountsView,
     IBStatusView, IBCommissionBalanceView, IBCommissionTransactionsView, IBTransactionsView,
-    StatsOverviewView, UserBankDetailsView
+    StatsOverviewView, UserBankDetailsView, CheckCentAccountView
 )
 from .views.email_document_views import (
     EmailBasedDocumentLookupView, get_documents_by_status, bulk_document_status
@@ -120,6 +120,9 @@ api_patterns = [
     path('ib/commission-transactions/', IBCommissionTransactionsView.as_view(), name='ib-commission-transactions'),
     path('ib/transactions/', IBTransactionsView.as_view(), name='ib-transactions'),
     path('ib-request/', csrf_exempt(IBRequestView.as_view()), name='api-ib-request'),  # Add the missing ib-request endpoint
+    
+    # Account type checking
+    path('check-cent-account/<str:account_id>/', CheckCentAccountView.as_view(), name='api-check-cent-account'),
     
     path('internal-transfer/', InternalTransferView.as_view(), name='api-internal-transfer'),
     path('open-positions/<str:account_id>/', OpenPositionsView.as_view(), name='api-open-positions'),

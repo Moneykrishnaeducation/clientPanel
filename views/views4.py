@@ -1710,3 +1710,82 @@ class IBTradingAccountsView(APIView):
         # Get all real trading accounts for this IB
         accounts = TradingAccount.objects.filter(user=user, account_type__in=["standard", "basic", "pro"]).values("account_id")
         return Response(list(accounts), status=status.HTTP_200_OK)
+
+
+class CheckCentAccountView(APIView):
+    """
+    API endpoint to check if a trading account is a CENT account.
+    """
+    authentication_classes = [BlacklistCheckingJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, account_id):
+        try:
+            print(f"[CHECK CENT] Checking account: {account_id} for user: {request.user.email}")
+            # Get the trading account
+            account = TradingAccount.objects.get(account_id=account_id, user=request.user)
+            print(f"[CHECK CENT] Account found: {account.account_id}, group_name: {account.group_name}")
+            
+            # Check if account is CENT type
+            def is_cent_account(acc):
+                """Check if account uses CENT alias by querying MT5 and TradeGroup"""
+                try:
+                    from adminPanel.models import TradeGroup
+                    
+                    # Get group from MT5 directly
+                    mt5_check = MT5ManagerActions()
+                    mt5_group = mt5_check.get_group_of(int(acc.account_id))
+                    
+                    print(f"[CHECK CENT] MT5 group for {acc.account_id}: {mt5_group}")
+                    
+                    if mt5_group:
+                        # Check for common CENT patterns in the group name
+                        if 'cent' in mt5_group.lower():
+                            print(f"[CHECK CENT] DETECTED: Contains 'cent'")
+                            return True
+                        
+                        if '-c-' in mt5_group.lower():
+                            print(f"[CHECK CENT] DETECTED: Contains '-c-'")
+                            return True
+                        
+                        # Query TradeGroup by MT5 group name and check alias
+                        trade_group = TradeGroup.objects.filter(
+                            models.Q(name=mt5_group) | models.Q(group_id=mt5_group)
+                        ).first()
+                        
+                        if trade_group and trade_group.alias and trade_group.alias.upper() == 'CENT':
+                            print(f"[CHECK CENT] DETECTED: TradeGroup alias is CENT")
+                            return True
+                    
+                    # Fallback: check if group_name field contains "cent"
+                    if acc.group_name and 'cent' in acc.group_name.lower():
+                        print(f"[CHECK CENT] DETECTED: group_name contains 'cent'")
+                        return True
+                    
+                    print(f"[CHECK CENT] NOT CENT: No patterns matched")
+                        
+                except Exception as e:
+                    logger.error(f"Error checking CENT account for {acc.account_id}: {e}")
+                
+                return False
+            
+            is_cent = is_cent_account(account)
+            
+            print(f"[CHECK CENT] Final result for {account_id}: is_cent={is_cent}")
+            
+            return Response({
+                'is_cent': is_cent,
+                'account_id': account_id
+            }, status=status.HTTP_200_OK)
+            
+        except TradingAccount.DoesNotExist:
+            return Response(
+                {'error': 'Trading account not found or does not belong to you.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error checking CENT account: {str(e)}")
+            return Response(
+                {'error': 'Failed to check account type.', 'is_cent': False},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
