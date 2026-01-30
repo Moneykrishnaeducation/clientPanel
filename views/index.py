@@ -30,3 +30,17 @@ def serve_client_app(request):
             return HttpResponse(f.read(), content_type='text/html')
     except FileNotFoundError:
         return HttpResponse('Client app not found', status=404)
+
+
+def serve_privacy_policy(request):
+    """
+    Serve a public privacy-policy HTML file from the client bundle so it can
+    be opened in a new tab without requiring authentication.
+    """
+    # Path to the static client public folder (Vite/CRA style)
+    file_path = os.path.join(settings.BASE_DIR, 'static', 'clientPanel', 'privacy-policy.html')
+    try:
+        with open(file_path, 'rb') as f:
+            return HttpResponse(f.read(), content_type='text/html')
+    except FileNotFoundError:
+        return HttpResponse('Privacy policy not found', status=404)

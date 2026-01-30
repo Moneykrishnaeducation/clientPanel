@@ -1091,6 +1091,14 @@ def google_oauth_view(request):
             # server callback URI for authorization-code flow
             callback_path = reverse('api:api-oauth-google-callback')
             redirect_uri = request.build_absolute_uri(callback_path)
+	    # persist the exact redirect_uri in session so the callback can reuse
+            # the identical value during token exchange (avoids redirect_uri_mismatch
+            # when proxies or hosts differ between requests)
+            try:
+                request.session['oauth_redirect_uri_google'] = redirect_uri
+                request.session.modified = True
+            except Exception:
+                pass
             # preserve requested action in state
             state_val = request.GET.get('state') or request.GET.get('action') or 'login'
             # generate CSRF-like nonce and store in session keyed by provider
@@ -1101,11 +1109,12 @@ def google_oauth_view(request):
             except Exception:
                 nonce = None
             # embed action and nonce into state (frontend sends action only; server appends nonce)
+            # Request additional People API scopes so we can read phone, addresses, birthdays
             params = {
                 'client_id': client_id,
                 'redirect_uri': redirect_uri,
                 'response_type': 'code',
-                'scope': 'openid email profile',
+                'scope': 'openid email profile https://www.googleapis.com/auth/user.phonenumbers.read https://www.googleapis.com/auth/user.addresses.read https://www.googleapis.com/auth/user.birthday.read',
                 'access_type': 'offline',
                 'prompt': 'select_account'
             }
@@ -1115,6 +1124,13 @@ def google_oauth_view(request):
                 else:
                     params['state'] = state_val
             auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urlencode(params)
+            # If caller requests JSON (workaround for proxies that rewrite Location headers),
+            # return the auth URL and let the browser navigate directly to accounts.google.com
+            try:
+                if str(request.GET.get('json') or '').lower() in ('1', 'true', 'yes'):
+                    return Response({'auth_url': auth_url})
+            except Exception:
+                pass
             return HttpResponseRedirect(auth_url)
         except Exception:
             logger.exception('Failed to build Google OAuth redirect')
@@ -1172,7 +1188,11 @@ def google_oauth_view(request):
         created = False
         if not user:
             # Create with random password
-            password = CustomUser.objects.make_random_password()
+            try:
+                password = CustomUser.objects.make_random_password()
+            except Exception:
+                from django.utils.crypto import get_random_string
+                password = get_random_string(12)
             user = CustomUser.objects.create_user(
                 username=email,
                 email=email,
@@ -1304,7 +1324,8 @@ def microsoft_oauth_view(request):
                 'client_id': client_id,
                 'redirect_uri': redirect_uri,
                 'response_type': 'code',
-                'scope': 'openid email profile',
+                # include Graph scope and offline_access so we can fetch profile and refresh tokens
+                'scope': 'openid email profile offline_access User.Read',
                 'response_mode': 'query',
                 'prompt': 'select_account'
             }
@@ -1314,6 +1335,13 @@ def microsoft_oauth_view(request):
                 else:
                     params['state'] = state_val
             auth_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?' + urlencode(params)
+	    # If caller requests JSON (workaround for proxies that rewrite Location headers),
+            # return the auth URL and let the browser navigate directly to accounts.google.com
+            try:
+                if str(request.GET.get('json') or '').lower() in ('1', 'true', 'yes'):
+                    return Response({'auth_url': auth_url})
+            except Exception:
+                pass
             return HttpResponseRedirect(auth_url)
         except Exception:
             logger.exception('Failed to build Microsoft OAuth redirect')
@@ -1379,7 +1407,11 @@ def microsoft_oauth_view(request):
         user = CustomUser.objects.filter(email__iexact=email).first()
         created = False
         if not user:
-            password = CustomUser.objects.make_random_password()
+            try:
+                password = CustomUser.objects.make_random_password()
+            except Exception:
+                from django.utils.crypto import get_random_string
+                password = get_random_string(12)
             user = CustomUser.objects.create_user(
                 username=email,
                 email=email,
@@ -1521,7 +1553,15 @@ def google_oauth_callback(request):
             logger.exception('Failed to validate oauth state for Google')
             return Response({'error': 'Invalid oauth state'}, status=status.HTTP_400_BAD_REQUEST)
 
-        redirect_uri = request.build_absolute_uri()
+        # Prefer the redirect URI saved during the initial auth request
+        redirect_uri = request.session.get('oauth_redirect_uri_google') or request.build_absolute_uri()
+        # consume the saved redirect URI
+        try:
+            if 'oauth_redirect_uri_google' in request.session:
+                del request.session['oauth_redirect_uri_google']
+                request.session.modified = True
+        except Exception:
+            pass
         token_url = 'https://oauth2.googleapis.com/token'
         data = {
             'code': code,
@@ -1536,6 +1576,7 @@ def google_oauth_callback(request):
             logger.exception('Google token exchange failed: %s', r.text)
             return Response({'error': 'Failed to exchange code for token'}, status=status.HTTP_400_BAD_REQUEST)
         token_json = r.json()
+        logger.debug('Google token exchange response: %s', {k: token_json.get(k) for k in ('access_token','id_token','refresh_token')})
         access_token = token_json.get('access_token')
         id_token = token_json.get('id_token')
         if not access_token:
@@ -1555,6 +1596,74 @@ def google_oauth_callback(request):
                 return Response({'error': 'Failed to fetch userinfo'}, status=status.HTTP_400_BAD_REQUEST)
             user_info = ui.json()
 
+        # If Google didn't return phone/dob/address in ID token or userinfo,
+        # attempt a People API lookup (requires People API scopes requested earlier).
+        try:
+            need_phone = not (user_info.get('phone_number') or user_info.get('phone') or user_info.get('phoneNumber'))
+            need_dob = not (user_info.get('birthdate') or user_info.get('dob') or user_info.get('birthday'))
+            need_address = not (user_info.get('address') or user_info.get('formatted_address') or user_info.get('location'))
+            if need_phone or need_dob or need_address:
+                ppl_fields = []
+                if need_phone:
+                    ppl_fields.append('phoneNumbers')
+                if need_dob:
+                    ppl_fields.append('birthdays')
+                if need_address:
+                    ppl_fields.append('addresses')
+                if ppl_fields:
+                    pparams = {'personFields': ','.join(ppl_fields)}
+                    pr = requests.get('https://people.googleapis.com/v1/people/me', params=pparams, headers={'Authorization': f'Bearer {access_token}'}, timeout=10)
+                    logger.debug('People API status: %s', pr.status_code)
+                    logger.debug('People API response snippet: %s', pr.text[:1000])
+                    if pr.status_code == 200:
+                        pdata = pr.json()
+                        # phone
+                        if need_phone:
+                            pnums = pdata.get('phoneNumbers') or []
+                            if pnums:
+                                # take the first value
+                                val = pnums[0].get('value')
+                                if val:
+                                    user_info['phone_number'] = val
+                        # birthdays
+                        if need_dob:
+                            bdays = pdata.get('birthdays') or []
+                            if bdays:
+                                # find a birthday with a full date
+                                for b in bdays:
+                                    d = b.get('date')
+                                    if d and d.get('year') and d.get('month') and d.get('day'):
+                                        try:
+                                            user_info['birthdate'] = f"{int(d.get('year')):04d}-{int(d.get('month')):02d}-{int(d.get('day')):02d}"
+                                            break
+                                        except Exception:
+                                            continue
+                                # if no year available, try month/day
+                                if not user_info.get('birthdate') and bdays:
+                                    d = bdays[0].get('date') or {}
+                                    if d and d.get('month') and d.get('day'):
+                                        try:
+                                            user_info['birthdate'] = f"0000-{int(d.get('month')):02d}-{int(d.get('day')):02d}"
+                                        except Exception:
+                                            pass
+                        # addresses
+                        if need_address:
+                            addrs = pdata.get('addresses') or []
+                            if addrs:
+                                a = addrs[0]
+                                formatted = a.get('formattedValue') or ''
+                                if not formatted:
+                                    parts = []
+                                    for k in ('streetAddress','city','region','postalCode','country'):
+                                        v = a.get(k)
+                                        if v:
+                                            parts.append(str(v))
+                                    formatted = ', '.join(parts)
+                                if formatted:
+                                    user_info['address'] = formatted
+        except Exception:
+            logger.exception('People API lookup failed')
+
         email = user_info.get('email')
         # Respect state: if client requested login and user doesn't exist, redirect to signup page
         state = (request.GET.get('state') or '').lower()
@@ -1565,6 +1674,10 @@ def google_oauth_callback(request):
             return HttpResponseRedirect(redirect_to)
         name = user_info.get('name') or ''
         picture = user_info.get('picture')
+        # Try to extract additional profile fields from Google claims/userinfo
+        phone_number = user_info.get('phone_number') or user_info.get('phone') or user_info.get('phoneNumber') or ''
+        dob = user_info.get('birthdate') or user_info.get('dob') or user_info.get('birthday') or None
+        address = user_info.get('address') or user_info.get('formatted_address') or user_info.get('location') or ''
         parts = name.split(maxsplit=1) if name else []
         first_name = parts[0] if parts else email.split('@')[0]
         last_name = parts[1] if len(parts) > 1 else ''
@@ -1572,14 +1685,21 @@ def google_oauth_callback(request):
         user = CustomUser.objects.filter(email__iexact=email).first()
         created = False
         if not user:
-            password = CustomUser.objects.make_random_password()
+            try:
+                password = CustomUser.objects.make_random_password()
+            except Exception:
+                from django.utils.crypto import get_random_string
+                password = get_random_string(12)
             user = CustomUser.objects.create_user(
                 username=email,
                 email=email,
                 password=password,
                 first_name=first_name,
                 last_name=last_name,
-                manager_admin_status='Client'
+                manager_admin_status='Client',
+                phone_number=phone_number or '',
+                address=address or '',
+                dob=(None if not dob else (datetime.fromisoformat(dob).date() if isinstance(dob, str) else dob))
             )
             created = True
 
@@ -1589,6 +1709,31 @@ def google_oauth_callback(request):
                 _save_profile_image_from_url(user, picture)
             except Exception:
                 logger.exception('Failed to save google profile image')
+
+        # Update other profile fields if provided by Google
+        updated_fields = []
+        try:
+            if phone_number and getattr(user, 'phone_number', None) != phone_number:
+                user.phone_number = phone_number
+                updated_fields.append('phone_number')
+            if address and getattr(user, 'address', None) != address:
+                user.address = address
+                updated_fields.append('address')
+            if dob:
+                try:
+                    parsed = datetime.fromisoformat(dob).date() if isinstance(dob, str) else dob
+                    if getattr(user, 'dob', None) != parsed:
+                        user.dob = parsed
+                        updated_fields.append('dob')
+                except Exception:
+                    pass
+            if updated_fields and not created:
+                try:
+                    user.save(update_fields=updated_fields)
+                except Exception:
+                    user.save()
+        except Exception:
+            logger.exception('Failed to update user profile fields from Google')
 
         # Update last-login info and log activity
         try:
@@ -1654,8 +1799,20 @@ def google_oauth_callback(request):
 @permission_classes([AllowAny])
 def microsoft_oauth_callback(request):
     """Server-side callback to handle Microsoft authorization-code exchange."""
+    # Diagnostic logging to help trace AADSTS / callback issues
+    try:
+        logger.debug('microsoft_oauth_callback invoked; path=%s; GET=%s; META.Host=%s; User-Agent=%s; session_keys=%s',
+                     request.path,
+                     dict(request.GET),
+                     request.META.get('HTTP_HOST'),
+                     request.META.get('HTTP_USER_AGENT'),
+                     list(request.session.keys()) if hasattr(request, 'session') else None)
+    except Exception:
+        logger.exception('Failed to log microsoft_oauth_callback entry values')
+
     code = request.GET.get('code')
     if not code:
+        logger.warning('microsoft_oauth_callback missing code; GET=%s', dict(request.GET))
         return Response({'error': 'Missing code'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
@@ -1665,7 +1822,9 @@ def microsoft_oauth_callback(request):
         if not client_id or not client_secret:
             return Response({'error': 'Microsoft OAuth not configured'}, status=status.HTTP_400_BAD_REQUEST)
 
-        redirect_uri = request.build_absolute_uri()
+        # Use the callback path only (no query string) for token exchange
+        # Azure requires the redirect_uri to exactly match the one used when requesting the code.
+        redirect_uri = request.build_absolute_uri(request.path)
         token_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token'
         data = {
             'client_id': client_id,
@@ -1723,22 +1882,39 @@ def microsoft_oauth_callback(request):
                 return Response({'error': 'Failed to fetch userinfo'}, status=status.HTTP_400_BAD_REQUEST)
             user_info = ui.json()
 
-        email = user_info.get('mail') or user_info.get('userPrincipalName')
+        # Try multiple claim names that may contain an address
+        email = (
+            user_info.get('mail') or
+            user_info.get('userPrincipalName') or
+            user_info.get('preferred_username') or
+            user_info.get('upn') or
+            (user_info.get('emails')[0] if isinstance(user_info.get('emails'), (list, tuple)) and user_info.get('emails') else None) or
+            user_info.get('unique_name')
+        )
+        if not email:
+            logger.warning('Microsoft oauth returned no email-like claim; user_info=%s', user_info)
+            return Response({'error': 'No email returned from Microsoft'}, status=status.HTTP_400_BAD_REQUEST)
+
         # Respect state: if client requested login and user doesn't exist, redirect to signup page
         state = (request.GET.get('state') or '').lower()
         frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or os.environ.get('FRONTEND_BASE_URL') or 'http://localhost:3000'
         if state == 'login' and not CustomUser.objects.filter(email__iexact=email).exists():
             redirect_to = frontend_base.rstrip('/') + '/register/?' + urlencode({'email': email})
             return HttpResponseRedirect(redirect_to)
+
         name = user_info.get('displayName') or ''
         parts = name.split(maxsplit=1) if name else []
-        first_name = parts[0] if parts else email.split('@')[0]
+        first_name = parts[0] if parts else (email.split('@')[0] if email else '')
         last_name = parts[1] if len(parts) > 1 else ''
 
         user = CustomUser.objects.filter(email__iexact=email).first()
         created = False
         if not user:
-            password = CustomUser.objects.make_random_password()
+            try:
+                password = CustomUser.objects.make_random_password()
+            except Exception:
+                from django.utils.crypto import get_random_string
+                password = get_random_string(12)
             user = CustomUser.objects.create_user(
                 username=email,
                 email=email,
@@ -2504,7 +2680,7 @@ def validate_token_view(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 @csrf_exempt
-def status_view(request):
+def status_view(request): 
     """Simple status endpoint that returns authentication status"""
     try:
         user = request.user
