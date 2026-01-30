@@ -4,7 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.views.static import serve
 from django.views.decorators.csrf import csrf_exempt
-from .views.index import serve_client_app, serve_privacy_policy
+from .views.index import serve_client_app
 from .views.client_app_view import pamm_client_view
 from .views import auth_views
 from .views import pamm_views
@@ -308,10 +308,6 @@ api_patterns = [
 client_patterns = [
     path('', serve_client_app, name='client-home'),
     path('dashboard/', serve_client_app, name='client-dashboard'),
-    # Public privacy policy - serve static HTML so it can be opened without auth
-    path('privacy-policy.html', serve_privacy_policy, name='privacy-policy-html'),
-    path('privacy-policy/', serve_privacy_policy, name='privacy-policy'),
-    path('privacy-policy', serve_privacy_policy, name='privacy-policy-no-slash'),
     # PAMM client page
     path('pamm/', pamm_client_view, name='pamm-client'),
     path('register', serve_client_app, name='client-register'),
