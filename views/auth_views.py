@@ -446,26 +446,65 @@ def client_login_view(request):
         
     email = request.data.get('email')
     password = request.data.get('password')
+    # Flag to indicate we're performing an auto-login (via cookie access token)
+    skip_otp = False
+    auto_login_used = False
+
+    def _user_from_access_token_cookie(req):
+        """Try to find a valid access token in cookies (or Authorization header)
+        and return the corresponding user, or None.
+        """
+        token_names = ['jwt_token', 'access_token', 'accessToken']
+        token = None
+        try:
+            for name in token_names:
+                token = req.COOKIES.get(name) or req.COOKIES.get(name.lower())
+                if token:
+                    break
+            if not token:
+                auth = req.META.get('HTTP_AUTHORIZATION', '')
+                if auth and auth.lower().startswith('bearer '):
+                    token = auth.split(' ', 1)[1].strip()
+            if not token:
+                return None
+            # validate token using SimpleJWT's AccessToken
+            from rest_framework_simplejwt.tokens import AccessToken
+            payload = AccessToken(token)
+            uid_claim = getattr(settings, 'SIMPLE_JWT', {}).get('USER_ID_CLAIM', 'user_id')
+            uid = payload.get(uid_claim) or payload.get('user_id')
+            if not uid:
+                return None
+            return CustomUser.objects.filter(id=uid).first()
+        except Exception:
+            logger.debug('Cookie-based access token validation failed', exc_info=True)
+            return None
     
     if not email or not password:
-        # Log failed login attempt
-        try:
-            ActivityLog.objects.create(
-                user=None,
-                activity="Login attempt - missing email or password",
-                ip_address=get_client_ip(request),
-                endpoint=request.path,
-                activity_type="create",
-                activity_category="client",
-                status_code=400,
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                timestamp=timezone.now()
-            )
-        except Exception:
-            logger.exception("Failed to create failed login ActivityLog")
-        return Response({
-            'error': 'Both email and password are required',
-        }, status=status.HTTP_400_BAD_REQUEST)
+        # Attempt cookie-based auto-login when credentials are not provided
+        cookie_user = _user_from_access_token_cookie(request)
+        if cookie_user:
+            user = cookie_user
+            skip_otp = True
+            auto_login_used = True
+        else:
+            # Log failed login attempt
+            try:
+                ActivityLog.objects.create(
+                    user=None,
+                    activity="Login attempt - missing email or password",
+                    ip_address=get_client_ip(request),
+                    endpoint=request.path,
+                    activity_type="create",
+                    activity_category="client",
+                    status_code=400,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now()
+                )
+            except Exception:
+                logger.exception("Failed to create failed login ActivityLog")
+            return Response({
+                'error': 'Both email and password are required',
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     # Parse remember flag from request (accept booleans or strings)
     remember_val = request.data.get('remember', False)
@@ -490,8 +529,10 @@ def client_login_view(request):
             return Response({'error': 'Too many login attempts from your IP. Try again later.'}, status=429)
 
     # Single optimized DB query for user by email OR username. Limit selected fields
-    user = CustomUser.objects.only('id', 'email', 'username', 'password', 'manager_admin_status', 'first_name', 'last_name')\
-        .filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
+    # Only run this when cookie-based auto-login was NOT used (so we don't overwrite it)
+    if not auto_login_used:
+        user = CustomUser.objects.only('id', 'email', 'username', 'password', 'manager_admin_status', 'first_name', 'last_name')\
+            .filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
 
     if not user:
         # Log failed login attempt
@@ -511,24 +552,25 @@ def client_login_view(request):
             logger.exception("Failed to create user-not-found ActivityLog")
         return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # Verify password using hash+salt verification
-    if not verify_password(user.password, password):
-        # Log failed login attempt
-        try:
-            ActivityLog.objects.create(
-                user=user,
-                activity="Login attempt - invalid password",
-                ip_address=get_client_ip(request),
-                endpoint=request.path,
-                activity_type="create",
-                activity_category="client",
-                status_code=401,
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                timestamp=timezone.now()
-            )
-        except Exception:
-            logger.exception("Failed to create invalid-password ActivityLog")
-        return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
+    # Verify password using hash+salt verification (skip if cookie-based auto-login)
+    if not skip_otp:
+        if not verify_password(user.password, password):
+            # Log failed login attempt
+            try:
+                ActivityLog.objects.create(
+                    user=user,
+                    activity="Login attempt - invalid password",
+                    ip_address=get_client_ip(request),
+                    endpoint=request.path,
+                    activity_type="create",
+                    activity_category="client",
+                    status_code=401,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now()
+                )
+            except Exception:
+                logger.exception("Failed to create invalid-password ActivityLog")
+            return Response({'error': 'Invalid credentials', 'message': 'Please check your email and password'}, status=status.HTTP_401_UNAUTHORIZED)
 
     # Check if user has access to client panel (allow Client, Admin, and Manager roles)
     allowed_roles = ['admin', 'manager', 'client', 'Admin', 'Manager', 'Client', 'None']
@@ -552,56 +594,57 @@ def client_login_view(request):
 
     # `current_ip` was determined earlier for rate-limiting and is reused here
 
-    # Always require OTP verification for login
+    # Always require OTP verification for login unless auto-login via cookie is used
     # Generate OTP and send to user's email
-    try:
-        # Generate login-specific OTP and attach to user (separate from password-reset OTP)
-        otp = f"{random.randint(100000, 999999)}"
-        # Hash OTP before storing
-        hashed_otp = hash_otp(otp)
-        user.login_otp = hashed_otp
-        user.login_otp_created_at = timezone.now()
-        user.save(update_fields=["login_otp", "login_otp_created_at"])
-
-        # Send OTP via email
+    if not skip_otp:
         try:
-            # Use the dedicated login OTP email template for clarity
-            EmailSender.send_login_otp_email(
-                user.email,
-                otp,
-                ip_address=current_ip,
-                login_time=timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-                first_name=user.first_name
-            )
-        except Exception:
-            logger.exception("Failed to send login OTP email to user")
+            # Generate login-specific OTP and attach to user (separate from password-reset OTP)
+            otp = f"{random.randint(100000, 999999)}"
+            # Hash OTP before storing
+            hashed_otp = hash_otp(otp)
+            user.login_otp = hashed_otp
+            user.login_otp_created_at = timezone.now()
+            user.save(update_fields=["login_otp", "login_otp_created_at"])
 
-        # Record that a verification was required (non-blocking)
-        try:
-            ActivityLog.objects.create(
-                user=user,
-                activity="Login attempt - OTP verification required",
-                ip_address=current_ip,
-                endpoint=request.path,
-                activity_type="update",
-                activity_category="client",
-                status_code=202,
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-                timestamp=timezone.now(),
-                related_object_id=user.id,
-                related_object_type="LoginVerification"
-            )
-        except Exception:
-            logger.exception("Failed to create ActivityLog for login verification requirement")
+            # Send OTP via email
+            try:
+                # Use the dedicated login OTP email template for clarity
+                EmailSender.send_login_otp_email(
+                    user.email,
+                    otp,
+                    ip_address=current_ip,
+                    login_time=timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    first_name=user.first_name
+                )
+            except Exception:
+                logger.exception("Failed to send login OTP email to user")
 
-        # Tell frontend verification is required. Do not issue tokens yet.
-        return Response({
-            'verification_required': True,
-            'message': 'A verification code was sent to your email. Please verify to continue.'
-        }, status=status.HTTP_202_ACCEPTED)
-    except Exception:
-        # If anything in the verification-path fails, log and continue to allow login to avoid lockout
-        logger.exception("Error while requiring login verification; falling back to normal login")
+            # Record that a verification was required (non-blocking)
+            try:
+                ActivityLog.objects.create(
+                    user=user,
+                    activity="Login attempt - OTP verification required",
+                    ip_address=current_ip,
+                    endpoint=request.path,
+                    activity_type="update",
+                    activity_category="client",
+                    status_code=202,
+                    user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                    timestamp=timezone.now(),
+                    related_object_id=user.id,
+                    related_object_type="LoginVerification"
+                )
+            except Exception:
+                logger.exception("Failed to create ActivityLog for login verification requirement")
+
+            # Tell frontend verification is required. Do not issue tokens yet.
+            return Response({
+                'verification_required': True,
+                'message': 'A verification code was sent to your email. Please verify to continue.'
+            }, status=status.HTTP_202_ACCEPTED)
+        except Exception:
+            # If anything in the verification-path fails, log and continue to allow login to avoid lockout
+            logger.exception("Error while requiring login verification; falling back to normal login")
 
     # --- Issue tokens and record login in background for non-new-IP logins ---
     refresh = RefreshToken.for_user(user)
@@ -691,6 +734,10 @@ def client_login_view(request):
             'name': f'{user.first_name} {user.last_name}'.strip() or user.username
         }
     }
+
+    # Indicate auto-login if it was used (cookie-based)
+    if auto_login_used:
+        resp_body['auto_login'] = True
 
     # Attach perf info in DEBUG
     if settings.DEBUG:
@@ -1266,6 +1313,7 @@ def google_oauth_view(request):
             'access': access_token,
             'refresh': str(refresh),
             'role': 'client',
+            'auto_login': True,
             'user': {
                 'email': user.email,
                 'name': f"{user.first_name} {user.last_name}".strip(),
@@ -1485,6 +1533,7 @@ def microsoft_oauth_view(request):
             'access': access_token,
             'refresh': str(refresh),
             'role': 'client',
+            'auto_login': True,
             'user': {
                 'email': user.email,
                 'name': f"{user.first_name} {user.last_name}".strip(),

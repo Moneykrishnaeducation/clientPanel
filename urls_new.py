@@ -310,8 +310,8 @@ client_patterns = [
     path('dashboard/', serve_client_app, name='client-dashboard'),
     # Public privacy policy - serve static HTML so it can be opened without auth
     path('privacy-policy.html', serve_privacy_policy, name='privacy-policy-html'),
-    path('privacy-policy/', serve_privacy_policy, name='privacy-policy'),
-    path('privacy-policy', serve_privacy_policy, name='privacy-policy-no-slash'),
+    path('policy/', serve_privacy_policy, name='privacy-policy'),
+    path('policy', serve_privacy_policy, name='privacy-policy-no-slash'),
     # PAMM client page
     path('pamm/', pamm_client_view, name='pamm-client'),
     path('register', serve_client_app, name='client-register'),
