@@ -27,6 +27,7 @@ import logging
 from datetime import timedelta
 import time
 from django.db.models import Q
+from brokerBackend import hosts
 from clientPanel import tasks as client_tasks
 from django.core.cache import cache
 import threading
@@ -2337,6 +2338,23 @@ def send_reset_otp_view(request):
     except CustomUser.DoesNotExist:
         return Response({'error': 'No account found with this email'}, status=status.HTTP_404_NOT_FOUND)
 
+
+def _get_activity_category(request, user=None):
+    """Determine activity category ('management' or 'client') based on request host.
+    Falls back to user role if host is not available.
+    """
+    try:
+        host = (request.get_host() or '').lower()
+    except Exception:
+        host = ''
+    if host.startswith('client.') or 'client.' in host:
+        return 'client'
+    elif host.startswith('admin.') or 'admin.' in host:
+        return 'management'
+    else:
+        
+        return 'client'
+
 class VerifyOtpView(APIView):
     permission_classes = [AllowAny]
 
@@ -2352,7 +2370,7 @@ class VerifyOtpView(APIView):
                     ip_address=request.META.get('REMOTE_ADDR', ''),
                     endpoint=request.path,
                     activity_type="create",
-                    activity_category="client",
+                    activity_category=_get_activity_category(request),
                     status_code=400,
                     user_agent=request.META.get("HTTP_USER_AGENT", ""),
                     timestamp=timezone.now()
@@ -2391,13 +2409,14 @@ class VerifyOtpView(APIView):
                     user.save(update_fields=['login_otp', 'login_otp_created_at'])
 
                     try:
-                        ActivityLog.objects.create(
+                            activity_category = _get_activity_category(request, user)
+                            ActivityLog.objects.create(
                             user=user,
                             activity="OTP verification attempt - OTP expired",
                             ip_address=get_client_ip(request),
                             endpoint=request.path,
                             activity_type="create",
-                            activity_category="client",
+                            activity_category=activity_category,
                             status_code=400,
                             user_agent=request.META.get("HTTP_USER_AGENT", ""),
                             timestamp=timezone.now(),
@@ -2434,13 +2453,14 @@ class VerifyOtpView(APIView):
                         except Exception:
                             logger.exception('Failed to send regenerated login OTP email')
                         try:
+                            activity_category = _get_activity_category(request, user)
                             ActivityLog.objects.create(
                                 user=user,
                                 activity="Login OTP regenerated after invalid attempt",
                                 ip_address=get_client_ip(request),
                                 endpoint=request.path,
                                 activity_type="update",
-                                activity_category="client",
+                                activity_category=activity_category,
                                 status_code=400,
                                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
                                 timestamp=timezone.now(),
@@ -2530,13 +2550,26 @@ class VerifyOtpView(APIView):
 
                     # Log activity (non-blocking)
                     try:
+                        # Determine activity category based on request host (admin vs client)
+                        try:
+                            host = (request.get_host() or '').lower()
+                        except Exception:
+                            host = ''
+                        if host.startswith('admin.') or 'admin.' in host:
+                            activity_category = 'management'
+                            activity_text = "Admin login via client portal (verified new IP)"
+                        # Check if IP is new for this user
+                        else:
+                            activity_category = 'client'
+                            activity_text = "User login via client portal (verified new IP)"
+                        
                         ActivityLog.objects.create(
                             user=user,
-                            activity="User login via client portal (verified new IP)",
+                            activity=activity_text,
                             ip_address=get_client_ip(request),
                             endpoint=request.path,
                             activity_type="update",
-                            activity_category="client",
+                            activity_category=activity_category,
                             status_code=200,
                             user_agent=request.META.get("HTTP_USER_AGENT", ""),
                             timestamp=timezone.now(),
@@ -2645,13 +2678,14 @@ class VerifyOtpView(APIView):
                         except Exception:
                             logger.exception('Failed to send regenerated password-reset OTP email')
                         try:
+                            activity_category = _get_activity_category(request, user)
                             ActivityLog.objects.create(
                                 user=user,
                                 activity="Password-reset OTP regenerated after invalid attempt",
                                 ip_address=get_client_ip(request),
                                 endpoint=request.path,
                                 activity_type="update",
-                                activity_category="client",
+                                activity_category=activity_category,
                                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
                                 timestamp=timezone.now(),
                                 related_object_id=user.id,
